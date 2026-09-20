@@ -1,5 +1,9 @@
-import type { Role } from '@prisma/client';
+import type { Prisma, Role } from '@prisma/client';
 import type { PageMeta } from '../utils/ApiResponse';
+import type { listingCardSelect, listingDetailSelect } from './listing.select';
+
+export type ListingCard = Prisma.ListingGetPayload<{ select: typeof listingCardSelect }>;
+export type ListingDetail = Prisma.ListingGetPayload<{ select: typeof listingDetailSelect }>;
 
 /** User shape returned by the API: never includes passwordHash. */
 export interface PublicUser {
