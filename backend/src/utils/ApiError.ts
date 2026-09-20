@@ -6,6 +6,7 @@ export type ApiErrorCode =
   | 'NOT_FOUND'
   | 'CONFLICT'
   | 'TOO_MANY_REQUESTS'
+  | 'SERVICE_UNAVAILABLE'
   | 'INTERNAL_ERROR';
 
 /** Operational error that is safe to expose to API clients. */
@@ -38,5 +39,8 @@ export class ApiError extends Error {
   }
   static conflict(message = 'Conflict') {
     return new ApiError(409, 'CONFLICT', message);
+  }
+  static unavailable(message = 'Service temporarily unavailable') {
+    return new ApiError(503, 'SERVICE_UNAVAILABLE', message);
   }
 }

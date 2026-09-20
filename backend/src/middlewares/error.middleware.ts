@@ -1,5 +1,6 @@
 import type { ErrorRequestHandler, RequestHandler } from 'express';
 import { Prisma } from '@prisma/client';
+import { MulterError } from 'multer';
 import { ApiError } from '../utils/ApiError';
 import { logger } from '../utils/logger';
 
@@ -31,6 +32,17 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
         .status(404)
         .json({ success: false, error: { code: 'NOT_FOUND', message: 'Resource not found' } });
     }
+  }
+
+  if (err instanceof MulterError) {
+    const tooLarge = err.code === 'LIMIT_FILE_SIZE';
+    return res.status(tooLarge ? 413 : 400).json({
+      success: false,
+      error: {
+        code: 'BAD_REQUEST',
+        message: tooLarge ? 'File is too large' : 'Invalid file upload',
+      },
+    });
   }
 
   // Malformed JSON body rejected by express.json()
