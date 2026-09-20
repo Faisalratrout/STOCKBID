@@ -1,6 +1,9 @@
 import type { Prisma, Role } from '@prisma/client';
 import type { PageMeta } from '../utils/ApiResponse';
 import type { listingCardSelect, listingDetailSelect } from './listing.select';
+import type { offerSelect } from './offer.select';
+
+export type OfferView = Prisma.OfferGetPayload<{ select: typeof offerSelect }>;
 
 export type ListingCard = Prisma.ListingGetPayload<{ select: typeof listingCardSelect }>;
 export type ListingDetail = Prisma.ListingGetPayload<{ select: typeof listingDetailSelect }>;
