@@ -1,16 +1,10 @@
 import { z } from 'zod';
+import { idParamSchema, money, page, pageSize } from './common.validators';
 
 const CONDITIONS = ['NEW', 'USED'] as const;
 const METHODS = ['OFFER', 'AUCTION'] as const;
 const HANDOVERS = ['PICKUP', 'SELLER_DELIVERY', 'BUYER_PICKUP'] as const;
 const STATUSES = ['ACTIVE', 'SOLD', 'EXPIRED', 'DELISTED'] as const;
-
-/** Positive amount with at most 2 decimals (matches Decimal(12,2)). */
-export const money = z
-  .number()
-  .positive()
-  .max(9_999_999_999.99)
-  .refine((v) => Math.abs(v * 100 - Math.round(v * 100)) < 1e-6, 'At most 2 decimal places');
 
 const futureDate = z.coerce.date().refine((d) => d.getTime() > Date.now(), 'Must be in the future');
 
@@ -56,11 +50,8 @@ export const updateListingSchema = z
   .partial()
   .refine((v) => Object.keys(v).length > 0, 'Provide at least one field to update');
 
-export const listingIdParamSchema = z.object({ id: z.uuid() });
+export const listingIdParamSchema = idParamSchema;
 export const listingImageParamSchema = z.object({ id: z.uuid(), imageId: z.uuid() });
-
-const page = z.coerce.number().int().min(1).default(1);
-const pageSize = z.coerce.number().int().min(1).max(50).default(12);
 
 // BRW-01..05: search, filter, sort, paginate.
 export const browseQuerySchema = z
