@@ -9,7 +9,6 @@ export type ApiErrorCode =
   | 'SERVICE_UNAVAILABLE'
   | 'INTERNAL_ERROR';
 
-/** Operational error that is safe to expose to API clients. */
 export class ApiError extends Error {
   constructor(
     public readonly statusCode: number,

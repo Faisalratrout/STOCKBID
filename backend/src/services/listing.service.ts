@@ -19,7 +19,6 @@ import { uploadImage } from './media.service';
 
 const MAX_IMAGES = 8;
 
-/** A listing is publicly browsable when active, in stock and not past its expiry. */
 const publiclyBrowsable = (now: Date): Prisma.ListingWhereInput => ({
   status: 'ACTIVE',
   quantityAvailable: { gt: 0 },

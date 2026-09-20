@@ -3,7 +3,6 @@ import jwt, { type SignOptions } from 'jsonwebtoken';
 import { Role } from '@prisma/client';
 import { env } from '../config/env';
 
-/** Opaque random token handed to the client (refresh / email verify / password reset). */
 export const randomToken = () => crypto.randomBytes(32).toString('base64url');
 
 /** Plain SHA-256 is enough for high-entropy one-time tokens (email verify / reset). */

@@ -7,8 +7,6 @@ import { logger } from './utils/logger';
 const app = createApp();
 const server = http.createServer(app);
 
-// Socket.io and the BullMQ worker attach here (see sockets/ and jobs/).
-
 server.listen(env.PORT, () => {
   logger.info(`STOCKBID API listening on :${env.PORT}`, { env: env.NODE_ENV });
 });

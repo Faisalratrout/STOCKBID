@@ -8,7 +8,7 @@ const parseBearer = (header: string | undefined) => {
   return scheme?.toLowerCase() === 'bearer' && token ? token : null;
 };
 
-/** AUTH-07: requires a valid access token and sets req.user. */
+// AUTH-07
 export const authenticate: RequestHandler = (req, _res, next) => {
   const token = parseBearer(req.headers.authorization);
   if (!token) return next(ApiError.unauthorized());
@@ -21,7 +21,6 @@ export const authenticate: RequestHandler = (req, _res, next) => {
   }
 };
 
-/** Sets req.user when a valid token is present, but never rejects (public pages with owner extras). */
 export const optionalAuth: RequestHandler = (req, _res, next) => {
   const token = parseBearer(req.headers.authorization);
   if (token) {
@@ -29,7 +28,7 @@ export const optionalAuth: RequestHandler = (req, _res, next) => {
       const { sub, role } = verifyAccessToken(token);
       req.user = { id: sub, role };
     } catch {
-      // Ignore: treated as anonymous.
+      // Bad token on a public route: carry on as anonymous instead of rejecting.
     }
   }
   next();

@@ -8,7 +8,6 @@ export interface AuthUser {
 declare global {
   namespace Express {
     interface Request {
-      /** Set by auth.middleware after JWT verification. */
       user?: AuthUser;
     }
   }

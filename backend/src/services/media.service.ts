@@ -1,7 +1,6 @@
 import { cloudinary, isCloudinaryConfigured } from '../config/cloudinary';
 import { ApiError } from '../utils/ApiError';
 
-/** Uploads an image buffer to Cloudinary and returns its secure URL. */
 export const uploadImage = (buffer: Buffer, folder: string): Promise<string> => {
   if (!isCloudinaryConfigured) {
     throw ApiError.unavailable('Image uploads are not configured on this server');

@@ -9,7 +9,6 @@ const body = (message: string) => ({
 
 const off = env.NODE_ENV === 'test';
 
-/** Global safety net. */
 export const apiLimiter = rateLimit({
   windowMs: 60_000,
   limit: 300,
@@ -19,7 +18,6 @@ export const apiLimiter = rateLimit({
   message: body('Too many requests, slow down'),
 });
 
-/** Login / register / reset endpoints: brute-force protection (AUTH-01..07). */
 export const authLimiter = rateLimit({
   windowMs: 15 * 60_000,
   limit: 20,

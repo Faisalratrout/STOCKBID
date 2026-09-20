@@ -8,7 +8,6 @@ export const notFoundHandler: RequestHandler = (req, _res, next) => {
   next(ApiError.notFound(`Route ${req.method} ${req.path} not found`));
 };
 
-/** Central error handler. Never leaks stack traces or internals to clients. */
 export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
   if (err instanceof ApiError) {
     return res.status(err.statusCode).json({
@@ -45,7 +44,6 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
     });
   }
 
-  // Malformed JSON body rejected by express.json()
   if (err && typeof err === 'object' && 'type' in err && err.type === 'entity.parse.failed') {
     return res
       .status(400)

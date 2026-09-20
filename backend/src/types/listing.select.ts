@@ -7,7 +7,7 @@ const sellerSelect = {
   },
 } satisfies Prisma.UserSelect;
 
-/** Compact shape for browse grids / dashboards (BRW-01). */
+// BRW-01
 export const listingCardSelect = {
   id: true,
   title: true,
@@ -25,7 +25,7 @@ export const listingCardSelect = {
   seller: { select: sellerSelect },
 } satisfies Prisma.ListingSelect;
 
-/** Full detail page shape (BRW-04). */
+// BRW-04
 export const listingDetailSelect = {
   id: true,
   sellerId: true,

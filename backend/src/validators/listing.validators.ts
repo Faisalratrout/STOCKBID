@@ -23,7 +23,7 @@ const fields = {
   handoverMethod: z.enum(HANDOVERS),
 };
 
-// STK-01 / STK-02: OFFER listings negotiate; AUCTION listings carry auction terms.
+// STK-01 / STK-02
 export const createListingSchema = z
   .object({
     ...fields,
@@ -46,7 +46,6 @@ export const createListingSchema = z
     }
   });
 
-// Price and quantity are only editable while a listing has no offers/bids/orders (enforced in service).
 export const updateListingSchema = z
   .object({
     ...fields,
