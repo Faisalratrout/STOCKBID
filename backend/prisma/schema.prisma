@@ -1,0 +1,356 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  BUYER
+  SELLER
+  ADMIN
+}
+
+enum ListingCondition {
+  NEW
+  USED
+}
+
+enum SellingMethod {
+  OFFER
+  AUCTION
+}
+
+// No DRAFT: draft/archived listing states are out of MVP scope.
+enum ListingStatus {
+  ACTIVE
+  SOLD
+  EXPIRED
+  DELISTED
+}
+
+enum HandoverMethod {
+  PICKUP
+  SELLER_DELIVERY
+  BUYER_PICKUP
+}
+
+enum OfferStatus {
+  PENDING
+  COUNTERED
+  ACCEPTED
+  REJECTED
+  EXPIRED
+}
+
+enum AuctionStatus {
+  SCHEDULED
+  ACTIVE
+  ENDED
+}
+
+enum OrderSource {
+  OFFER
+  AUCTION
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  FULFILLED
+  COMPLETED
+  CANCELLED
+}
+
+enum NotificationType {
+  NEW_OFFER
+  COUNTER_OFFER
+  OFFER_ACCEPTED
+  OFFER_REJECTED
+  OUTBID
+  AUCTION_ENDED
+  LISTING_MATCH
+  ORDER_STATUS_CHANGED
+  SYSTEM
+}
+
+enum ReportTargetType {
+  LISTING
+  USER
+}
+
+enum ReportStatus {
+  OPEN
+  RESOLVED
+  DISMISSED
+}
+
+model User {
+  id              String   @id @default(uuid())
+  email           String   @unique
+  passwordHash    String
+  role            Role
+  isEmailVerified Boolean  @default(false)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Open question (see LAYER2.md): one Role per User today. If dual
+  // Buyer+Seller roles get approved later, extend via a UserRole join
+  // table rather than changing this field — keeps Listing/Offer/Order
+  // untouched.
+
+  businessProfile    BusinessProfile?
+  refreshTokens      RefreshToken[]
+  emailVerifications EmailVerificationToken[]
+  passwordResets     PasswordResetToken[]
+  listings           Listing[]                @relation("SellerListings")
+  offersMade         Offer[]                  @relation("BuyerOffers")
+  bidsPlaced         Bid[]                    @relation("BuyerBids")
+  ordersAsBuyer      Order[]                  @relation("BuyerOrders")
+  ordersAsSeller     Order[]                  @relation("SellerOrders")
+  notifications      Notification[]
+  reportsFiled       Report[]                 @relation("ReportedBy")
+  reportsReceived    Report[]                 @relation("ReportedUser")
+  categoryInterests  CategoryInterest[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+  revokedAt DateTime?
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model EmailVerificationToken {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+  usedAt    DateTime?
+
+  @@map("email_verification_tokens")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+  usedAt    DateTime?
+
+  @@map("password_reset_tokens")
+}
+
+model BusinessProfile {
+  id                String             @id @default(uuid())
+  userId            String             @unique
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  companyName       String
+  logoUrl           String?
+  industry          String?
+  location          String?
+  phone             String?
+  description       String?
+  isVerified        Boolean            @default(false)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  categoryInterests CategoryInterest[]
+
+  @@map("business_profiles")
+}
+
+model Category {
+  id                String             @id @default(uuid())
+  name              String             @unique
+  slug              String             @unique
+  createdAt         DateTime           @default(now())
+  listings          Listing[]
+  categoryInterests CategoryInterest[]
+
+  @@map("categories")
+}
+
+model CategoryInterest {
+  id                String          @id @default(uuid())
+  businessProfileId String
+  businessProfile   BusinessProfile @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+  categoryId        String
+  category          Category        @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  userId            String
+  user              User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([businessProfileId, categoryId])
+  @@map("category_interests")
+}
+
+model Listing {
+  id                String           @id @default(uuid())
+  sellerId          String
+  seller            User             @relation("SellerListings", fields: [sellerId], references: [id])
+  title             String
+  description       String
+  categoryId        String
+  category          Category         @relation(fields: [categoryId], references: [id])
+  condition         ListingCondition
+  quantityTotal     Int
+  quantityAvailable Int
+  location          String
+  sellingMethod     SellingMethod
+  startingPrice     Decimal          @db.Decimal(12, 2)
+  handoverMethod    HandoverMethod
+  status            ListingStatus    @default(ACTIVE)
+  expiresAt         DateTime?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  images            ListingImage[]
+  offers            Offer[]
+  auction           Auction?
+  orders            Order[]
+  reports           Report[]
+
+  @@index([status, categoryId])
+  @@index([sellerId])
+  @@map("listings")
+}
+
+model ListingImage {
+  id        String  @id @default(uuid())
+  listingId String
+  listing   Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  url       String
+  position  Int     @default(0)
+
+  @@map("listing_images")
+}
+
+model Offer {
+  id                     String      @id @default(uuid())
+  listingId              String
+  listing                Listing     @relation(fields: [listingId], references: [id])
+  buyerId                String
+  buyer                  User        @relation("BuyerOffers", fields: [buyerId], references: [id])
+  quantity               Int
+  price                  Decimal     @db.Decimal(12, 2)
+  message                String?
+  status                 OfferStatus @default(PENDING)
+  parentOfferId          String?
+  parentOffer            Offer?      @relation("OfferChain", fields: [parentOfferId], references: [id])
+  counterOffers          Offer[]     @relation("OfferChain")
+  createdBySellerCounter Boolean     @default(false)
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
+  order                  Order?
+
+  @@index([listingId, status])
+  @@index([buyerId])
+  @@map("offers")
+}
+
+model Auction {
+  id           String        @id @default(uuid())
+  listingId    String        @unique
+  listing      Listing       @relation(fields: [listingId], references: [id])
+  startingBid  Decimal       @db.Decimal(12, 2)
+  minIncrement Decimal       @db.Decimal(12, 2)
+  currentBid   Decimal?      @db.Decimal(12, 2)
+  startAt      DateTime      @default(now())
+  endAt        DateTime
+  status       AuctionStatus @default(ACTIVE)
+  winningBidId String?       @unique
+  winningBid   Bid?          @relation("WinningBid", fields: [winningBidId], references: [id])
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  bids         Bid[]         @relation("AuctionBids")
+  order        Order?
+
+  @@index([status, endAt])
+  @@map("auctions")
+}
+
+model Bid {
+  id         String   @id @default(uuid())
+  auctionId  String
+  auction    Auction  @relation("AuctionBids", fields: [auctionId], references: [id])
+  buyerId    String
+  buyer      User     @relation("BuyerBids", fields: [buyerId], references: [id])
+  amount     Decimal  @db.Decimal(12, 2)
+  createdAt  DateTime @default(now())
+  wonAuction Auction? @relation("WinningBid")
+
+  @@index([auctionId, amount])
+  @@map("bids")
+}
+
+model Order {
+  id             String         @id @default(uuid())
+  listingId      String
+  listing        Listing        @relation(fields: [listingId], references: [id])
+  buyerId        String
+  buyer          User           @relation("BuyerOrders", fields: [buyerId], references: [id])
+  sellerId       String
+  seller         User           @relation("SellerOrders", fields: [sellerId], references: [id])
+  sourceType     OrderSource
+  offerId        String?        @unique
+  offer          Offer?         @relation(fields: [offerId], references: [id])
+  auctionId      String?        @unique
+  auction        Auction?       @relation(fields: [auctionId], references: [id])
+  quantity       Int
+  agreedPrice    Decimal        @db.Decimal(12, 2)
+  handoverMethod HandoverMethod
+  status         OrderStatus    @default(PENDING)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  fulfilledAt    DateTime?
+  completedAt    DateTime?
+
+  @@index([buyerId, status])
+  @@index([sellerId, status])
+  @@map("orders")
+}
+
+model Notification {
+  id                String           @id @default(uuid())
+  userId            String
+  user              User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type              NotificationType
+  message           String
+  relatedEntityType String?
+  relatedEntityId   String?
+  isRead            Boolean          @default(false)
+  createdAt         DateTime         @default(now())
+
+  @@index([userId, isRead])
+  @@map("notifications")
+}
+
+model Report {
+  id           String           @id @default(uuid())
+  reporterId   String
+  reporter     User             @relation("ReportedBy", fields: [reporterId], references: [id])
+  targetType   ReportTargetType
+  listingId    String?
+  listing      Listing?         @relation(fields: [listingId], references: [id])
+  targetUserId String?
+  targetUser   User?            @relation("ReportedUser", fields: [targetUserId], references: [id])
+  reason       String
+  status       ReportStatus     @default(OPEN)
+  createdAt    DateTime         @default(now())
+  resolvedAt   DateTime?
+
+  @@index([status])
+  @@map("reports")
+}
