@@ -1,0 +1,60 @@
+{
+  "name": "stockbid-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "STOCKBID backend API",
+  "main": "dist/server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "test": "vitest run",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.10.0",
+    "@prisma/client": "^7.10.0",
+    "bcrypt": "^6.0.0",
+    "bullmq": "^6.3.8",
+    "cloudinary": "^2.11.0",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.1",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.7.0",
+    "helmet": "^8.3.0",
+    "ioredis": "^6.0.0",
+    "jsonwebtoken": "^9.0.3",
+    "multer": "^2.4.0",
+    "pg": "^8.23.0",
+    "socket.io": "^4.8.3",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/bcrypt": "^6.0.0",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/multer": "^2.2.0",
+    "@types/node": "^26.6.2",
+    "@types/pg": "^8.23.1",
+    "@types/supertest": "^7.2.1",
+    "eslint": "^9.39.5",
+    "prettier": "^3.9.8",
+    "prisma": "^7.10.0",
+    "supertest": "^7.2.2",
+    "tsx": "^4.23.15",
+    "typescript": "~5.9.0",
+    "typescript-eslint": "^8.70.0",
+    "vitest": "^5.0.1"
+  }
+}
