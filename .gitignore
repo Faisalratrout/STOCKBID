@@ -1,0 +1,28 @@
+# Local rules / tooling (never commit)
+CLAUDE.md
+LAYER2.md
+graphify-out/
+.claude/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Temp verification / debug output
+VERIFY_OUTPUT.txt
+
+# Dependencies and build output
+node_modules/
+dist/
+build/
+.next/
+coverage/
+*.log
+*.tsbuildinfo
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
