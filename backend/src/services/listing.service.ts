@@ -12,6 +12,7 @@ import type {
   UpdateListingInput,
 } from '../validators/listing.validators';
 import { uploadImage } from './media.service';
+import { onAuctionCreated } from './auction.service';
 
 // Requirement mapping: STK-01 create listing, STK-02 auction terms on create, STK-03 edit,
 // STK-04 delist, STK-05 photos, STK-06 seller's own listings, STK-07 expiry rules;
@@ -36,7 +37,7 @@ export const createListing = async (
   const isAuction = input.sellingMethod === 'AUCTION' && input.auction;
   const expiresAt = isAuction ? input.auction!.endAt : input.expiresAt;
 
-  return prisma.listing.create({
+  const listing = await prisma.listing.create({
     data: {
       sellerId,
       title: input.title,
@@ -64,6 +65,10 @@ export const createListing = async (
     },
     select: listingDetailSelect,
   });
+
+  // AUC-01: schedule the close job once the auction row exists and has committed.
+  if (listing.auction) await onAuctionCreated(listing.auction.id, listing.auction.endAt);
+  return listing;
 };
 
 /** BRW-01..03, BRW-05 */
