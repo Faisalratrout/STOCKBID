@@ -1,7 +1,6 @@
 import { Client } from 'pg';
 
-/** True when Postgres is reachable AND migrations have been applied. Used with describe.skipIf. */
-export const isDbReady = async (): Promise<boolean> => {
+const checkDb = async (): Promise<boolean> => {
   const client = new Client({
     connectionString: process.env.DATABASE_URL,
     connectionTimeoutMillis: 2000,
@@ -15,4 +14,13 @@ export const isDbReady = async (): Promise<boolean> => {
   } finally {
     await client.end().catch(() => undefined);
   }
+};
+
+/** True when Postgres is reachable AND migrated. Used with describe.skipIf; in CI a false result throws so DB tests can't silently skip. */
+export const isDbReady = async (): Promise<boolean> => {
+  const ready = await checkDb();
+  if (!ready && process.env.CI) {
+    throw new Error('CI requires a reachable, migrated Postgres; refusing to skip DB tests');
+  }
+  return ready;
 };
