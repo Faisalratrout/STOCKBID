@@ -2,11 +2,6 @@ name: Backend CI
 
 on:
   push:
-    branches: [main]
-    paths:
-      - "backend/**"
-      - ".github/workflows/ci.yml"
-  pull_request:
     paths:
       - "backend/**"
       - ".github/workflows/ci.yml"
@@ -22,8 +17,8 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -40,14 +35,14 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: backend/package-lock.json
       - run: cp .env.example .env
-      - run: docker compose up -d --wait postgres
+      - run: docker compose up -d --wait
       - run: npm ci
       - run: npx prisma generate
       - run: npx prisma migrate deploy
