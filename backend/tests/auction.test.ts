@@ -227,6 +227,90 @@ describe.skipIf(!dbReady)('auctions (needs Postgres with migrations applied)', (
     expect((await auctionState(auctionId)).status).toBe('ENDED');
   });
 
+  const delist = (listingId: string) =>
+    request(app).delete(`/api/listings/${listingId}`).set(seller.auth);
+
+  const listingStatus = async (id: string) =>
+    (await prisma.listing.findUniqueOrThrow({ where: { id }, select: { status: true } })).status;
+
+  it('STK-04/AUC-02: delisting an auction ends it, so it rejects later bids', async () => {
+    const { listingId, auctionId } = await newAuctionListing(2, 5, 100);
+    expect((await delist(listingId)).status).toBe(204);
+    expect((await auctionState(auctionId)).status).toBe('ENDED');
+    expect((await bid(buyerA, auctionId, 100)).status).toBe(409);
+    expect(await prisma.bid.count({ where: { auctionId } })).toBe(0);
+  });
+
+  it('AUC-02: an ACTIVE auction whose listing is not ACTIVE rejects bids', async () => {
+    const { listingId, auctionId } = await newAuctionListing(2, 5, 100);
+    // State left behind by the old delist path, which did not end the auction.
+    await prisma.listing.update({ where: { id: listingId }, data: { status: 'DELISTED' } });
+    expect((await bid(buyerA, auctionId, 100)).status).toBe(409);
+  });
+
+  it('AUC-05: closing an auction whose listing was delisted never sells it', async () => {
+    const { listingId, auctionId } = await newAuctionListing(2, 5, 100);
+    await bid(buyerA, auctionId, 100);
+    await prisma.listing.update({ where: { id: listingId }, data: { status: 'DELISTED' } });
+
+    await closeAuction(auctionId);
+
+    expect((await auctionState(auctionId)).status).toBe('ENDED');
+    expect(await prisma.order.count({ where: { auctionId } })).toBe(0);
+    expect(await listingStatus(listingId)).toBe('DELISTED');
+  });
+
+  it('STK-04/AUC-02: a delist racing a first bid: exactly one of them wins', async () => {
+    for (let i = 0; i < 5; i++) {
+      const { listingId, auctionId } = await newAuctionListing(2, 5, 100);
+      const [d, b] = await Promise.all([delist(listingId), bid(buyerA, auctionId, 100)]);
+      const bids = await prisma.bid.count({ where: { auctionId } });
+      const status = await listingStatus(listingId);
+
+      if (d.status === 204) {
+        expect(b.status).toBe(409);
+        expect(bids).toBe(0);
+        expect(status).toBe('DELISTED');
+      } else {
+        expect(d.status).toBe(409);
+        expect(b.status).toBe(200);
+        expect(bids).toBe(1);
+        expect(status).toBe('ACTIVE');
+      }
+    }
+  });
+
+  it('AUC-02/05: the highest amount leads even when its createdAt is older (clock skew)', async () => {
+    const { auctionId } = await newAuctionListing(2, 10, 50);
+    const now = Date.now();
+    // Simulate two API servers with skewed clocks: the higher bid got the earlier timestamp.
+    await prisma.bid.create({
+      data: { auctionId, buyerId: buyerA.id, amount: 60, createdAt: new Date(now - 5_000) },
+    });
+    await prisma.bid.create({
+      data: { auctionId, buyerId: buyerB.id, amount: 50, createdAt: new Date(now) },
+    });
+    await prisma.auction.update({ where: { id: auctionId }, data: { currentBid: 60 } });
+
+    // The outbid notification must go to the real leader (buyerA), not the latest-stamped bidder.
+    expect((await bid(buyerB, auctionId, 70)).status).toBe(200);
+    expect(
+      await prisma.notification.count({
+        where: { userId: buyerA.id, type: 'OUTBID', relatedEntityId: auctionId },
+      }),
+    ).toBe(1);
+
+    await prisma.bid.create({
+      data: { auctionId, buyerId: buyerA.id, amount: 80, createdAt: new Date(now - 10_000) },
+    });
+    await prisma.auction.update({ where: { id: auctionId }, data: { currentBid: 80 } });
+    await closeAuction(auctionId);
+
+    const order = await prisma.order.findFirstOrThrow({ where: { auctionId } });
+    expect(order.buyerId).toBe(buyerA.id);
+    expect(order.agreedPrice.toString()).toBe('40');
+  });
+
   it('AUC-05: closing an auction with no bids ends it without creating an order', async () => {
     const { auctionId } = await newAuctionListing(1, 5, 30);
     await closeAuction(auctionId);

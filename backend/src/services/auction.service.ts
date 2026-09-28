@@ -2,6 +2,7 @@ import type { Auction, Listing, Prisma } from '@prisma/client';
 import { prisma } from '../config/db';
 import { ApiError } from '../utils/ApiError';
 import { pageMeta } from '../utils/ApiResponse';
+import { lockAuction } from '../utils/locks';
 import { perUnit } from '../utils/money';
 import type { AuthUser } from '../types/express';
 import type { AuctionView, BidView, Paginated } from '../types/dto';
@@ -15,14 +16,17 @@ import { emitAuctionEnded, emitNewBid, emitOutbid } from '../sockets/emitter';
 type Tx = Prisma.TransactionClient;
 type AuctionWithListing = Auction & { listing: Listing };
 
-// Same discipline as offer.service's lockListing: every state change on an auction's bids
-// takes this row lock first, so the "is this still the highest bid" check and the write that
-// follows it can never be split by a concurrent bid or the close job.
-const lockAuction = async (tx: Tx, auctionId: string) => {
-  const rows = await tx.$queryRaw<{ id: string }[]>`
-    SELECT id FROM auctions WHERE id = ${auctionId} FOR UPDATE`;
-  if (rows.length === 0) throw ApiError.notFound('Auction not found');
-};
+// Every state change on an auction's bids (and on its listing's status) takes lockAuction
+// first, so the "is this still the highest bid" check and the write that follows it can never
+// be split by a concurrent bid, a delist or the close job.
+
+// AUC-02/05: the leader is the highest amount, never the latest createdAt. createdAt comes from
+// the API server's clock, so across instances with clock skew (or within one millisecond) it
+// can order a lower bid after a higher one. Amounts strictly increase under the lock.
+const leaderOrder: Prisma.BidOrderByWithRelationInput[] = [
+  { amount: 'desc' },
+  { createdAt: 'desc' },
+];
 
 const loadAuction = async (tx: Tx, auctionId: string): Promise<AuctionWithListing> =>
   tx.auction.findUniqueOrThrow({ where: { id: auctionId }, include: { listing: true } });
@@ -89,7 +93,11 @@ export const placeBid = async (
     await lockAuction(tx, auctionId);
     const auction = await loadAuction(tx, auctionId);
 
-    if (auction.status !== 'ACTIVE' || auction.endAt <= new Date()) {
+    if (
+      auction.status !== 'ACTIVE' ||
+      auction.listing.status !== 'ACTIVE' ||
+      auction.endAt <= new Date()
+    ) {
       throw ApiError.conflict('This auction is no longer accepting bids');
     }
 
@@ -102,7 +110,7 @@ export const placeBid = async (
 
     const previousLeader = await tx.bid.findFirst({
       where: { auctionId },
-      orderBy: { createdAt: 'desc' },
+      orderBy: leaderOrder,
       select: { buyerId: true },
     });
 
@@ -145,10 +153,15 @@ export const closeAuction = async (auctionId: string): Promise<CloseResult> => {
     const auction = await loadAuction(tx, auctionId);
     if (auction.status !== 'ACTIVE') return { alreadyClosed: true as const };
 
-    const winningBid = await tx.bid.findFirst({
-      where: { auctionId },
-      orderBy: { createdAt: 'desc' },
-    });
+    // A listing that is no longer ACTIVE (e.g. delisted before delist ended its auction) must
+    // never be sold. End without a sale instead of throwing, or the job and the sweep would
+    // retry it forever.
+    if (auction.listing.status !== 'ACTIVE') {
+      await tx.auction.update({ where: { id: auctionId }, data: { status: 'ENDED' } });
+      return { alreadyClosed: false as const, winner: null };
+    }
+
+    const winningBid = await tx.bid.findFirst({ where: { auctionId }, orderBy: leaderOrder });
 
     if (!winningBid) {
       await tx.auction.update({ where: { id: auctionId }, data: { status: 'ENDED' } });
@@ -174,7 +187,7 @@ export const closeAuction = async (auctionId: string): Promise<CloseResult> => {
     });
 
     const { count } = await tx.listing.updateMany({
-      where: { id: auction.listingId, quantityAvailable: { gte: quantity } },
+      where: { id: auction.listingId, status: 'ACTIVE', quantityAvailable: { gte: quantity } },
       data: { quantityAvailable: { decrement: quantity }, status: 'SOLD' },
     });
     if (count !== 1) throw ApiError.conflict('Listing stock changed unexpectedly at auction close');

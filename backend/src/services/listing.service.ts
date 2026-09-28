@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../config/db';
 import { ApiError } from '../utils/ApiError';
+import { lockAuction } from '../utils/locks';
 import { pageMeta } from '../utils/ApiResponse';
 import type { AuthUser } from '../types/express';
 import type { ListingCard, ListingDetail, Paginated } from '../types/dto';
@@ -210,21 +211,36 @@ export const updateListing = async (
   return getListing(id, { id: sellerId, role: 'SELLER' });
 };
 
-/** STK-04: soft delete. An auction that already has bids cannot be pulled (atomic guard in WHERE). */
+/**
+ * STK-04: soft delete. An auction that already has bids cannot be pulled. For auction listings
+ * this takes the same auction lock as placeBid, so a bid cannot commit between the "no bids"
+ * check and the delist, and it ends the auction so it can never take bids or produce an order.
+ */
 export const delistListing = async (id: string, sellerId: string): Promise<void> => {
   await loadOwned(id, sellerId);
-  const { count } = await prisma.listing.updateMany({
-    where: {
-      id,
-      sellerId,
-      status: 'ACTIVE',
-      OR: [{ auction: { is: null } }, { auction: { is: { bids: { none: {} } } } }],
-    },
-    data: { status: 'DELISTED' },
+  await prisma.$transaction(async (tx) => {
+    const auction = await tx.auction.findUnique({ where: { listingId: id }, select: { id: true } });
+    if (auction) await lockAuction(tx, auction.id);
+
+    const { count } = await tx.listing.updateMany({
+      where: {
+        id,
+        sellerId,
+        status: 'ACTIVE',
+        OR: [{ auction: { is: null } }, { auction: { is: { bids: { none: {} } } } }],
+      },
+      data: { status: 'DELISTED' },
+    });
+    if (count !== 1) {
+      throw ApiError.conflict('Listing is not active or its auction already has bids');
+    }
+    if (auction) {
+      await tx.auction.updateMany({
+        where: { id: auction.id, status: 'ACTIVE' },
+        data: { status: 'ENDED' },
+      });
+    }
   });
-  if (count !== 1) {
-    throw ApiError.conflict('Listing is not active or its auction already has bids');
-  }
 };
 
 /** STK-05 */

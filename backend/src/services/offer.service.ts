@@ -2,6 +2,7 @@ import type { Listing, Offer, Prisma } from '@prisma/client';
 import { prisma } from '../config/db';
 import { ApiError } from '../utils/ApiError';
 import { pageMeta } from '../utils/ApiResponse';
+import { lockListing } from '../utils/locks';
 import type { AuthUser } from '../types/express';
 import type { OfferView, Paginated } from '../types/dto';
 import { offerSelect } from '../types/offer.select';
@@ -24,15 +25,10 @@ const OFFER_TTL_MS = OFFER_TTL_DAYS * 24 * 60 * 60 * 1000;
 type Tx = Prisma.TransactionClient;
 type OfferWithListing = Offer & { listing: Listing };
 
-// Every state change on a listing's offers/stock takes this row lock first. It serializes
+// Every state change on a listing's offers/stock takes lockListing first. It serializes
 // concurrent accepts, counters and new offers per listing, so stock checks below cannot be
 // invalidated between the read and the write. Default READ COMMITTED is enough because each
 // statement after the lock sees everything the previous lock holder committed.
-const lockListing = async (tx: Tx, listingId: string) => {
-  const rows = await tx.$queryRaw<{ id: string }[]>`
-    SELECT id FROM listings WHERE id = ${listingId} FOR UPDATE`;
-  if (rows.length === 0) throw ApiError.notFound('Listing not found');
-};
 
 const isStale = (offer: Offer) => offer.createdAt.getTime() + OFFER_TTL_MS <= Date.now();
 
