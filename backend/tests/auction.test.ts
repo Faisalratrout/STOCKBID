@@ -6,6 +6,7 @@ import { auctionCloseQueue } from '../src/jobs/auctionClose.job';
 import { closeAuction, sweepOverdueAuctions } from '../src/services/auction.service';
 import { placeBidSchema } from '../src/validators/auction.validators';
 import { isDbReady } from './helpers/db';
+import { markEmailVerified } from './helpers/users';
 
 describe('bid validators (AUC-02)', () => {
   it('accepts a positive whole-or-cent amount only', () => {
@@ -31,7 +32,7 @@ describe.skipIf(!dbReady)('auctions (needs Postgres with migrations applied)', (
   let buyerB: Session;
   let outsiderSeller: Session;
 
-  const register = async (role: 'BUYER' | 'SELLER', tag: string): Promise<Session> => {
+  const register = async (role: 'BUYER' | 'SELLER', tag: string, verified = true): Promise<Session> => {
     const res = await request(app)
       .post('/api/auth/register')
       .send({
@@ -40,6 +41,7 @@ describe.skipIf(!dbReady)('auctions (needs Postgres with migrations applied)', (
         role,
         companyName: `${tag} Co`,
       });
+    if (verified) await markEmailVerified(res.body.data.user.id);
     return {
       auth: { Authorization: `Bearer ${res.body.data.accessToken}` },
       id: res.body.data.user.id,
@@ -422,5 +424,14 @@ describe.skipIf(!dbReady)('auctions (needs Postgres with migrations applied)', (
         where: { userId: seller.id, type: 'AUCTION_ENDED', relatedEntityId: auctionId },
       }),
     ).toBe(1);
+  });
+
+  it('AUTH-04: an unverified buyer cannot bid', async () => {
+    const unverified = await register('BUYER', 'unverified', false);
+    const { auctionId } = await newAuctionListing(1, 5, 100);
+    const res = await bid(unverified, auctionId, 100);
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe('EMAIL_NOT_VERIFIED');
+    expect(await prisma.bid.count({ where: { auctionId } })).toBe(0);
   });
 });

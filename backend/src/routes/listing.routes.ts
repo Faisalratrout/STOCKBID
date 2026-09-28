@@ -2,6 +2,7 @@ import { Router } from 'express';
 import * as ctrl from '../controllers/listing.controller';
 import { authenticate, optionalAuth } from '../middlewares/auth.middleware';
 import { requireRole } from '../middlewares/role.middleware';
+import { requireVerifiedEmail } from '../middlewares/verified.middleware';
 import { imageUpload } from '../middlewares/upload.middleware';
 import { validate } from '../middlewares/validate.middleware';
 import {
@@ -22,7 +23,13 @@ listingRoutes.get('/', validate({ query: browseQuerySchema }), ctrl.browse);
 
 // Seller-only. Declared before '/:id' so "mine" is not parsed as an id.
 listingRoutes.get('/mine', ...seller, validate({ query: mineQuerySchema }), ctrl.mine);
-listingRoutes.post('/', ...seller, validate({ body: createListingSchema }), ctrl.create);
+listingRoutes.post(
+  '/',
+  ...seller,
+  requireVerifiedEmail,
+  validate({ body: createListingSchema }),
+  ctrl.create,
+);
 
 // Detail (BRW-04): public, but owners/admins can also see delisted listings.
 listingRoutes.get('/:id', optionalAuth, validate({ params: listingIdParamSchema }), ctrl.detail);

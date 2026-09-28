@@ -2,6 +2,7 @@ import { Router } from 'express';
 import * as ctrl from '../controllers/offer.controller';
 import { authenticate } from '../middlewares/auth.middleware';
 import { requireRole } from '../middlewares/role.middleware';
+import { requireVerifiedEmail } from '../middlewares/verified.middleware';
 import { validate } from '../middlewares/validate.middleware';
 import { idParamSchema } from '../validators/common.validators';
 import {
@@ -14,7 +15,13 @@ export const offerRoutes = Router();
 
 offerRoutes.use(authenticate);
 
-offerRoutes.post('/', requireRole('BUYER'), validate({ body: createOfferSchema }), ctrl.create);
+offerRoutes.post(
+  '/',
+  requireRole('BUYER'),
+  requireVerifiedEmail,
+  validate({ body: createOfferSchema }),
+  ctrl.create,
+);
 offerRoutes.get(
   '/mine',
   requireRole('BUYER'),

@@ -4,6 +4,7 @@ import { createApp } from '../src/app';
 import { prisma } from '../src/config/db';
 import { browseQuerySchema, createListingSchema } from '../src/validators/listing.validators';
 import { isDbReady } from './helpers/db';
+import { markEmailVerified } from './helpers/users';
 
 const base = {
   title: 'Pallet of LED monitors',
@@ -55,7 +56,7 @@ describe.skipIf(!dbReady)('listings (needs Postgres with migrations applied)', (
   let buyerAuth = { Authorization: '' };
   let buyerId = '';
 
-  const register = async (role: 'BUYER' | 'SELLER', tag: string) => {
+  const register = async (role: 'BUYER' | 'SELLER', tag: string, verified = true) => {
     const res = await request(app)
       .post('/api/auth/register')
       .send({
@@ -64,6 +65,7 @@ describe.skipIf(!dbReady)('listings (needs Postgres with migrations applied)', (
         role,
         companyName: tag + ' Co',
       });
+    if (verified) await markEmailVerified(res.body.data.user.id);
     return {
       auth: { Authorization: `Bearer ${res.body.data.accessToken}` },
       id: res.body.data.user.id as string,
@@ -256,5 +258,16 @@ describe.skipIf(!dbReady)('listings (needs Postgres with migrations applied)', (
       .send(validBody({ categoryId: '00000000-0000-4000-8000-000000000009' }));
     expect(bad.status).toBe(400);
     expect((await request(app).get('/api/listings/not-a-uuid')).status).toBe(422);
+  });
+
+  it('AUTH-04: an unverified seller cannot create a listing until they verify', async () => {
+    const unverified = await register('SELLER', 'unverified', false);
+    const res = await request(app).post('/api/listings').set(unverified.auth).send(validBody());
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe('EMAIL_NOT_VERIFIED');
+    expect(await prisma.listing.count({ where: { sellerId: unverified.id } })).toBe(0);
+
+    await markEmailVerified(unverified.id);
+    expect((await request(app).post('/api/listings').set(unverified.auth).send(validBody())).status).toBe(201);
   });
 });

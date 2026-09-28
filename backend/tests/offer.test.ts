@@ -6,6 +6,7 @@ import { EXPIRE_OFFERS, runMaintenanceJob } from '../src/jobs/maintenance.job';
 import { expireStaleOffers } from '../src/services/offer.service';
 import { counterOfferSchema, createOfferSchema } from '../src/validators/offer.validators';
 import { isDbReady } from './helpers/db';
+import { markEmailVerified } from './helpers/users';
 
 describe('offer validators (OFR-01)', () => {
   const listingId = '00000000-0000-4000-8000-000000000001';
@@ -40,7 +41,7 @@ describe.skipIf(!dbReady)('offers (needs Postgres with migrations applied)', () 
   let buyerB: Session;
   let outsider: Session;
 
-  const register = async (role: 'BUYER' | 'SELLER', tag: string): Promise<Session> => {
+  const register = async (role: 'BUYER' | 'SELLER', tag: string, verified = true): Promise<Session> => {
     const res = await request(app)
       .post('/api/auth/register')
       .send({
@@ -49,6 +50,7 @@ describe.skipIf(!dbReady)('offers (needs Postgres with migrations applied)', () 
         role,
         companyName: `${tag} Co`,
       });
+    if (verified) await markEmailVerified(res.body.data.user.id);
     return {
       auth: { Authorization: `Bearer ${res.body.data.accessToken}` },
       id: res.body.data.user.id,
@@ -309,5 +311,14 @@ describe.skipIf(!dbReady)('offers (needs Postgres with migrations applied)', () 
       prisma.$executeRaw`UPDATE listings SET "quantityAvailable" = -1 WHERE id = ${listingId}`,
     ).rejects.toThrow();
     expect((await listingState(listingId)).quantityAvailable).toBe(2);
+  });
+
+  it('AUTH-04: an unverified buyer cannot make an offer', async () => {
+    const unverified = await register('BUYER', 'unverified', false);
+    const listingId = await newListing(5);
+    const res = await offer(unverified, listingId, 1);
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe('EMAIL_NOT_VERIFIED');
+    expect(await prisma.offer.count({ where: { buyerId: unverified.id } })).toBe(0);
   });
 });

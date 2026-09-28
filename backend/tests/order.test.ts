@@ -5,6 +5,7 @@ import { prisma } from '../src/config/db';
 import { signAccessToken } from '../src/utils/tokens';
 import { updateOrderStatusSchema } from '../src/validators/order.validators';
 import { isDbReady } from './helpers/db';
+import { markEmailVerified } from './helpers/users';
 
 describe('order status validators (ORD-04)', () => {
   it('rejects PENDING and unknown statuses', () => {
@@ -27,7 +28,7 @@ describe.skipIf(!dbReady)('orders (needs Postgres with migrations applied)', () 
   let buyer: Session;
   let outsider: Session;
 
-  const register = async (role: 'BUYER' | 'SELLER', tag: string): Promise<Session> => {
+  const register = async (role: 'BUYER' | 'SELLER', tag: string, verified = true): Promise<Session> => {
     const res = await request(app)
       .post('/api/auth/register')
       .send({
@@ -36,6 +37,7 @@ describe.skipIf(!dbReady)('orders (needs Postgres with migrations applied)', () 
         role,
         companyName: `${tag} Co`,
       });
+    if (verified) await markEmailVerified(res.body.data.user.id);
     return {
       auth: { Authorization: `Bearer ${res.body.data.accessToken}` },
       id: res.body.data.user.id,

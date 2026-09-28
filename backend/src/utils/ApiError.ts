@@ -3,6 +3,7 @@ export type ApiErrorCode =
   | 'VALIDATION_ERROR'
   | 'UNAUTHORIZED'
   | 'FORBIDDEN'
+  | 'EMAIL_NOT_VERIFIED'
   | 'NOT_FOUND'
   | 'CONFLICT'
   | 'TOO_MANY_REQUESTS'
@@ -32,6 +33,13 @@ export class ApiError extends Error {
   }
   static forbidden(message = 'You do not have permission to do this') {
     return new ApiError(403, 'FORBIDDEN', message);
+  }
+  static emailNotVerified() {
+    return new ApiError(
+      403,
+      'EMAIL_NOT_VERIFIED',
+      'Verify your email address before listing, making offers or bidding',
+    );
   }
   static notFound(message = 'Resource not found') {
     return new ApiError(404, 'NOT_FOUND', message);

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import * as ctrl from '../controllers/auction.controller';
 import { authenticate } from '../middlewares/auth.middleware';
 import { requireRole } from '../middlewares/role.middleware';
+import { requireVerifiedEmail } from '../middlewares/verified.middleware';
 import { validate } from '../middlewares/validate.middleware';
 import { biddingLimiter } from '../middlewares/rateLimiter.middleware';
 import { idParamSchema } from '../validators/common.validators';
@@ -21,6 +22,7 @@ auctionRoutes.post(
   '/:id/bids',
   requireRole('BUYER'),
   biddingLimiter,
+  requireVerifiedEmail,
   validate({ params: idParamSchema, body: placeBidSchema }),
   ctrl.bid,
 );
