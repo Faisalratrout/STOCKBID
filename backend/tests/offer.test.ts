@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../src/app';
 import { prisma } from '../src/config/db';
+import { EXPIRE_OFFERS, runMaintenanceJob } from '../src/jobs/maintenance.job';
 import { expireStaleOffers } from '../src/services/offer.service';
 import { counterOfferSchema, createOfferSchema } from '../src/validators/offer.validators';
 import { isDbReady } from './helpers/db';
@@ -269,6 +270,37 @@ describe.skipIf(!dbReady)('offers (needs Postgres with migrations applied)', () 
     expect(await expireStaleOffers()).toBeGreaterThanOrEqual(1);
     expect((await prisma.offer.findUniqueOrThrow({ where: { id } })).status).toBe('EXPIRED');
     expect((await listingState(listingId)).quantityAvailable).toBe(10);
+  });
+
+  const backdate = (id: string) =>
+    prisma.offer.update({
+      where: { id },
+      data: { createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000) },
+    });
+
+  it('OFR-08: a stale pending offer does not lock its buyer out of the listing', async () => {
+    const listingId = await newListing(10);
+    const stale = (await offer(buyerA, listingId, 2)).body.data.id as string;
+    await backdate(stale);
+
+    // Before the fix: withdraw said "expired" and a new offer said "already open", forever.
+    const fresh = await offer(buyerA, listingId, 3, 95);
+    expect(fresh.status).toBe(201);
+    expect((await prisma.offer.findUniqueOrThrow({ where: { id: stale } })).status).toBe(
+      'EXPIRED',
+    );
+    expect((await act(seller, fresh.body.data.id, 'accept')).status).toBe(200);
+  });
+
+  it('OFR-08: the expire-stale-offers maintenance job expires stale offers', async () => {
+    const listingId = await newListing(10);
+    const stale = (await offer(buyerB, listingId, 2)).body.data.id as string;
+    await backdate(stale);
+
+    expect(await runMaintenanceJob({ name: EXPIRE_OFFERS })).toBeGreaterThanOrEqual(1);
+    expect((await prisma.offer.findUniqueOrThrow({ where: { id: stale } })).status).toBe(
+      'EXPIRED',
+    );
   });
 
   it('the DB itself refuses negative stock (CHECK constraint backstop)', async () => {

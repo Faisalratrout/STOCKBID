@@ -31,6 +31,7 @@ type OfferWithListing = Offer & { listing: Listing };
 // statement after the lock sees everything the previous lock holder committed.
 
 const isStale = (offer: Offer) => offer.createdAt.getTime() + OFFER_TTL_MS <= Date.now();
+const staleCutoff = (now = new Date()) => new Date(now.getTime() - OFFER_TTL_MS);
 
 const listingOpenForDeals = (listing: Listing) =>
   listing.status === 'ACTIVE' && (!listing.expiresAt || listing.expiresAt > new Date());
@@ -83,6 +84,13 @@ export const createOffer = async (buyerId: string, input: CreateOfferInput): Pro
     if (input.quantity > listing.quantityAvailable) {
       throw ApiError.badRequest(`Only ${listing.quantityAvailable} units are available`);
     }
+
+    // OFR-08: expire stale offers here too, not only in the periodic job. A stale PENDING offer
+    // would otherwise block this buyer below, and it can no longer be withdrawn either.
+    await tx.offer.updateMany({
+      where: { listingId: listing.id, status: 'PENDING', createdAt: { lte: staleCutoff() } },
+      data: { status: 'EXPIRED' },
+    });
 
     const open = await tx.offer.findFirst({
       where: { listingId: listing.id, buyerId, status: 'PENDING' },
@@ -245,10 +253,10 @@ export const counterOffer = async (
   return view(newId);
 };
 
-/** OFR-08: called by the expiry job. Returns how many offers were expired. */
+/** OFR-08: run by the maintenance job. Returns how many offers were expired. */
 export const expireStaleOffers = async (now = new Date()): Promise<number> => {
   const { count } = await prisma.offer.updateMany({
-    where: { status: 'PENDING', createdAt: { lte: new Date(now.getTime() - OFFER_TTL_MS) } },
+    where: { status: 'PENDING', createdAt: { lte: staleCutoff(now) } },
     data: { status: 'EXPIRED' },
   });
   return count;
