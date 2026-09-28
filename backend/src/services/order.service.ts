@@ -8,8 +8,9 @@ import { orderSelect } from '../types/order.select';
 import type { OrderListQuery, UpdateOrderStatusInput } from '../validators/order.validators';
 import { createNotification } from './notification.service';
 
-// ORD-01: orders are created automatically when an offer is accepted.
-// agreedPrice is the per-unit price; the order total is quantity * agreedPrice.
+// ORD-01: orders are created automatically when an offer is accepted. totalPrice is the
+// authoritative amount (quantity * the offer's unit price, exact in Decimal); agreedPrice is the
+// per-unit price for display.
 export const createOrderFromOffer = (
   tx: Prisma.TransactionClient,
   offer: {
@@ -30,12 +31,14 @@ export const createOrderFromOffer = (
       offerId: offer.id,
       quantity: offer.quantity,
       agreedPrice: offer.price,
+      totalPrice: offer.price.mul(offer.quantity),
       handoverMethod: listing.handoverMethod,
     },
   });
 
 // ORD-01/AUC-06: orders are created automatically when an auction closes with a winning bid.
-// agreedPrice here is winningBid.amount / quantity, already rounded to cents by the caller.
+// totalPrice is the winning bid amount itself. agreedPrice is winningBid.amount / quantity rounded
+// to cents by the caller, display only: quantity * agreedPrice may not equal totalPrice.
 export const createOrderFromAuction = (
   tx: Prisma.TransactionClient,
   data: {
@@ -45,6 +48,7 @@ export const createOrderFromAuction = (
     auctionId: string;
     quantity: number;
     agreedPrice: Prisma.Decimal;
+    totalPrice: Prisma.Decimal;
     handoverMethod: 'PICKUP' | 'SELLER_DELIVERY' | 'BUYER_PICKUP';
   },
 ) =>
@@ -57,6 +61,7 @@ export const createOrderFromAuction = (
       auctionId: data.auctionId,
       quantity: data.quantity,
       agreedPrice: data.agreedPrice,
+      totalPrice: data.totalPrice,
       handoverMethod: data.handoverMethod,
     },
   });

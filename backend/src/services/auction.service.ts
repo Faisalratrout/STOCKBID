@@ -200,6 +200,7 @@ export const closeAuction = async (auctionId: string): Promise<CloseResult> => {
       auctionId,
       quantity,
       agreedPrice,
+      totalPrice: winningBid.amount,
       handoverMethod: auction.listing.handoverMethod,
     });
 

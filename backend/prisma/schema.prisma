@@ -309,7 +309,13 @@ model Order {
   auctionId      String?        @unique
   auction        Auction?       @relation(fields: [auctionId], references: [id])
   quantity       Int
+  // Per-unit price, rounded to cents: display only, NOT authoritative (for auctions it is
+  // winningBid.amount / quantity, so quantity * agreedPrice can differ from what was agreed).
   agreedPrice    Decimal        @db.Decimal(12, 2)
+  // ORD-01: the authoritative amount owed for the whole order. Set from the winning bid for
+  // auctions and quantity * offer price for offers; never derived from agreedPrice.
+  // 18 digits: 1,000,000 units at the 9,999,999,999.99 unit maximum must fit.
+  totalPrice     Decimal        @db.Decimal(18, 2)
   handoverMethod HandoverMethod
   status         OrderStatus    @default(PENDING)
   createdAt      DateTime       @default(now())

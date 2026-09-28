@@ -204,6 +204,7 @@ describe.skipIf(!dbReady)('offers (needs Postgres with migrations applied)', () 
       status: 'PENDING',
     });
     expect(order.agreedPrice.toString()).toBe('88.5');
+    expect(order.totalPrice.toString()).toBe('442.5');
 
     expect(await listingState(listingId)).toEqual({ quantityAvailable: 0, status: 'SOLD' });
     expect((await prisma.offer.findUniqueOrThrow({ where: { id: rival } })).status).toBe('EXPIRED');

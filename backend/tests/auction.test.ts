@@ -358,6 +358,30 @@ describe.skipIf(!dbReady)('auctions (needs Postgres with migrations applied)', (
     expect(await prisma.order.count({ where: { auctionId } })).toBe(1);
   });
 
+  it('ORD-01: an auction order total is the winning bid itself, even when the per-unit split rounds', async () => {
+    // 100.00 / 3 = 33.33 per unit, and 3 * 33.33 = 99.99: the total must stay 100.00.
+    const { auctionId } = await newAuctionListing(3, 5, 100);
+    expect((await bid(buyerA, auctionId, 100)).status).toBe(200);
+    await closeAuction(auctionId);
+
+    const order = await prisma.order.findFirstOrThrow({ where: { auctionId } });
+    expect(order.agreedPrice.toString()).toBe('33.33');
+    expect(order.totalPrice.toString()).toBe('100');
+
+    const res = await request(app).get(`/api/orders/${order.id}`).set(buyerA.auth);
+    expect(res.body.data.totalPrice).toBe('100');
+  });
+
+  it('ORD-01: a rounding-up split does not overcharge: 1000.00 for 7 units totals 1000.00', async () => {
+    const { auctionId } = await newAuctionListing(7, 5, 1000);
+    expect((await bid(buyerA, auctionId, 1000)).status).toBe(200);
+    await closeAuction(auctionId);
+
+    const order = await prisma.order.findFirstOrThrow({ where: { auctionId } });
+    expect(order.agreedPrice.toString()).toBe('142.86');
+    expect(order.totalPrice.toString()).toBe('1000');
+  });
+
   it('AUC-05: closing an auction with no bids ends it without creating an order', async () => {
     const { auctionId } = await newAuctionListing(1, 5, 30);
     await closeAuction(auctionId);

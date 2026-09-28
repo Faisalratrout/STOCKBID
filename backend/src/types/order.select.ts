@@ -10,6 +10,7 @@ export const orderSelect = {
   auctionId: true,
   quantity: true,
   agreedPrice: true,
+  totalPrice: true,
   handoverMethod: true,
   status: true,
   createdAt: true,
