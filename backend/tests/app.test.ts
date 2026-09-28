@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../src/app';
+import { parseTrustProxy } from '../src/config/env';
 
 const app = createApp();
 
@@ -25,5 +26,26 @@ describe('app scaffold', () => {
       .send('{"broken":');
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('BAD_REQUEST');
+  });
+});
+
+describe('TRUST_PROXY parsing (L1)', () => {
+  it('maps booleans, hop counts and address lists to what Express expects', () => {
+    expect(parseTrustProxy('true')).toBe(true);
+    expect(parseTrustProxy('false')).toBe(false);
+    expect(parseTrustProxy(' 2 ')).toBe(2);
+    expect(parseTrustProxy('loopback, 10.0.0.0/8')).toBe('loopback, 10.0.0.0/8');
+  });
+
+  it('the app uses the configured value instead of a hardcoded one', async () => {
+    vi.stubEnv('TRUST_PROXY', 'false');
+    vi.resetModules();
+    try {
+      const fresh = await import('../src/app');
+      expect(fresh.createApp().get('trust proxy')).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
   });
 });

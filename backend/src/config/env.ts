@@ -1,10 +1,24 @@
 import 'dotenv/config';
 import { z } from 'zod';
 
+/**
+ * Express `trust proxy` from TRUST_PROXY: "true"/"false", a hop count ("1"), or a list/preset
+ * Express understands ("loopback", "10.0.0.0/8"). Must match the real deployment: trusting a
+ * proxy that isn't there lets clients spoof X-Forwarded-For and dodge per-IP rate limits.
+ */
+export const parseTrustProxy = (raw: string): boolean | number | string => {
+  const v = raw.trim();
+  if (v === 'true') return true;
+  if (v === 'false') return false;
+  if (/^\d+$/.test(v)) return Number(v);
+  return v;
+};
+
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(4000),
   CORS_ORIGIN: z.string().default('http://localhost:3000'),
+  TRUST_PROXY: z.string().min(1).default('1').transform(parseTrustProxy),
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().default('redis://localhost:6379'),
   JWT_ACCESS_SECRET: z.string().min(32, 'JWT_ACCESS_SECRET must be at least 32 chars'),
