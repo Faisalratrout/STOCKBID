@@ -4,6 +4,7 @@ import { prisma } from '../config/db';
 import { env } from '../config/env';
 import { ApiError } from '../utils/ApiError';
 import { hashRefreshToken, randomToken, sha256, signAccessToken } from '../utils/tokens';
+import { logger } from '../utils/logger';
 import { appLink, sendMail } from './mailer.service';
 import type { AuthResult, PublicUser, TokenPair } from '../types/dto';
 import type { LoginInput, RegisterInput } from '../validators/auth.validators';
@@ -168,11 +169,7 @@ export const resendVerification = async (userId: string): Promise<void> => {
   await createVerificationToken(user.id, user.email);
 };
 
-/** AUTH-05: always succeeds so the response never reveals whether an email is registered. */
-export const forgotPassword = async (email: string): Promise<void> => {
-  const user = await prisma.user.findUnique({ where: { email } });
-  if (!user || !user.isActive) return;
-
+const sendResetLink = async (user: { id: string; email: string }) => {
   const token = randomToken();
   await prisma.passwordResetToken.create({
     data: {
@@ -188,7 +185,26 @@ export const forgotPassword = async (email: string): Promise<void> => {
   });
 };
 
-/** AUTH-06: single-use token; all existing sessions are revoked. */
+/**
+ * AUTH-05: the response must not reveal whether an email is registered, by content or timing.
+ * Known and unknown emails do the same lookup and return; issuing the token and sending the mail
+ * are deferred until after the response, so the request never waits on them. This is in-process,
+ * not durable: if the process dies first the user simply requests another link.
+ */
+export const forgotPassword = async (email: string): Promise<void> => {
+  const user = await prisma.user.findUnique({
+    where: { email },
+    select: { id: true, email: true, isActive: true },
+  });
+  setImmediate(() => {
+    if (!user?.isActive) return;
+    sendResetLink(user).catch((err: unknown) =>
+      logger.error('Failed to send password reset link', { userId: user.id, err: String(err) }),
+    );
+  });
+};
+
+/** AUTH-06: single-use token; all existing sessions and all other reset links are revoked. */
 export const resetPassword = async (token: string, newPassword: string): Promise<void> => {
   const record = await prisma.passwordResetToken.findUnique({
     where: { tokenHash: sha256(token) },
@@ -204,6 +220,11 @@ export const resetPassword = async (token: string, newPassword: string): Promise
       data: { usedAt: new Date() },
     });
     if (count !== 1) throw ApiError.badRequest('Reset link is invalid or has expired');
+    // Any other outstanding reset link for this user dies with this one.
+    await tx.passwordResetToken.updateMany({
+      where: { userId: record.userId, usedAt: null },
+      data: { usedAt: new Date() },
+    });
     await tx.user.update({ where: { id: record.userId }, data: { passwordHash } });
     await tx.refreshToken.updateMany({
       where: { userId: record.userId, revokedAt: null },

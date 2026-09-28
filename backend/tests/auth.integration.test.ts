@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../src/app';
 import { prisma } from '../src/config/db';
@@ -105,5 +105,73 @@ describe.skipIf(!dbReady)('auth flow (needs Postgres with migrations applied)', 
       .post('/api/auth/login')
       .send({ email, password: 'NewPassw0rd!y' });
     expect(relogin.status).toBe(200);
+  });
+
+  const mintResetToken = async (userId: string) => {
+    const { randomToken, sha256 } = await import('../src/utils/tokens');
+    const token = randomToken();
+    await prisma.passwordResetToken.create({
+      data: { userId, tokenHash: sha256(token), expiresAt: new Date(Date.now() + 60_000) },
+    });
+    return token;
+  };
+
+  it('AUTH-06: using a newer reset link kills every older unused one', async () => {
+    const user = await prisma.user.findUniqueOrThrow({ where: { email } });
+    const older = await mintResetToken(user.id);
+    const newer = await mintResetToken(user.id);
+
+    const reset = await request(app)
+      .post('/api/auth/reset-password')
+      .send({ token: newer, password: 'Fresh1passw0rd' });
+    expect(reset.status).toBe(200);
+
+    const stale = await request(app)
+      .post('/api/auth/reset-password')
+      .send({ token: older, password: 'Attacker1pass' });
+    expect(stale.status).toBe(400);
+    expect(
+      await prisma.passwordResetToken.count({ where: { userId: user.id, usedAt: null } }),
+    ).toBe(0);
+  });
+
+  it('AUTH-05: forgot-password answers without waiting on token/mail work for a known email', async () => {
+    const user = await prisma.user.findUniqueOrThrow({ where: { email } });
+    const before = await prisma.passwordResetToken.count({ where: { userId: user.id } });
+
+    // Hold the token insert open: a response that waits on it would never arrive.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const original = prisma.passwordResetToken.create.bind(prisma.passwordResetToken);
+    const spy = vi
+      .spyOn(prisma.passwordResetToken, 'create')
+      .mockImplementation(((args: Parameters<typeof original>[0]) =>
+        gate.then(() => original(args))) as unknown as typeof original);
+    try {
+      const outcome = await Promise.race([
+        request(app).post('/api/auth/forgot-password').send({ email }),
+        new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), 3_000)),
+      ]);
+      expect(outcome).not.toBe('timeout');
+      const known = outcome as request.Response;
+
+      const unknown = await request(app)
+        .post('/api/auth/forgot-password')
+        .send({ email: `nobody-${runId}@test.example` });
+      expect(known.status).toBe(unknown.status);
+      expect(known.body).toEqual(unknown.body);
+    } finally {
+      release();
+    }
+
+    // The deferred work still issues the link for the real account.
+    await vi.waitFor(
+      async () =>
+        expect(await prisma.passwordResetToken.count({ where: { userId: user.id } })).toBe(
+          before + 1,
+        ),
+      { timeout: 3_000 },
+    );
+    spy.mockRestore();
   });
 });
