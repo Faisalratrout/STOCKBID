@@ -382,6 +382,36 @@ describe.skipIf(!dbReady)('auctions (needs Postgres with migrations applied)', (
     expect(order.totalPrice.toString()).toBe('1000');
   });
 
+  it('ORD-04: cancelling an auction order restocks, reopens the listing and cancels that auction for good', async () => {
+    const { listingId, auctionId } = await newAuctionListing(3, 5, 100);
+    await bid(buyerA, auctionId, 100);
+    await bid(buyerB, auctionId, 120);
+    await closeAuction(auctionId);
+    const order = await prisma.order.findFirstOrThrow({ where: { auctionId } });
+
+    const res = await request(app)
+      .patch(`/api/orders/${order.id}/status`)
+      .set(buyerB.auth)
+      .send({ status: 'CANCELLED' });
+    expect(res.status).toBe(200);
+
+    expect(
+      await prisma.listing.findUniqueOrThrow({
+        where: { id: listingId },
+        select: { status: true, quantityAvailable: true },
+      }),
+    ).toEqual({ status: 'ACTIVE', quantityAvailable: 3 });
+    expect((await auctionState(auctionId)).status).toBe('CANCELLED');
+
+    // The old auction cannot be resumed: no bids, and neither the close job nor the sweep
+    // can produce a second order from its old bids.
+    expect((await bid(buyerA, auctionId, 200)).status).toBe(409);
+    await closeAuction(auctionId);
+    await sweepOverdueAuctions();
+    expect(await prisma.order.count({ where: { auctionId } })).toBe(1);
+    expect((await auctionState(auctionId)).status).toBe('CANCELLED');
+  });
+
   it('AUC-05: closing an auction with no bids ends it without creating an order', async () => {
     const { auctionId } = await newAuctionListing(1, 5, 30);
     await closeAuction(auctionId);

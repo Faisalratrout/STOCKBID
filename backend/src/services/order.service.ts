@@ -1,6 +1,7 @@
 import type { OrderStatus, Prisma } from '@prisma/client';
 import { prisma } from '../config/db';
 import { ApiError } from '../utils/ApiError';
+import { lockAuction, lockListing } from '../utils/locks';
 import { pageMeta } from '../utils/ApiResponse';
 import type { AuthUser } from '../types/express';
 import type { OrderView, Paginated } from '../types/dto';
@@ -101,22 +102,46 @@ export const getOrder = async (orderId: string, actor: AuthUser): Promise<OrderV
   return order;
 };
 
-// ORD-03/04: who may move an order from which state to which, keyed [from][to].
-type Party = 'buyer' | 'seller';
+// ORD-03/04: who may move an order from which state to which, keyed [from][to]. Either party
+// may cancel until the order is FULFILLED; after that nobody can.
+type Party = 'buyer' | 'seller' | 'either';
 const TRANSITIONS: Partial<Record<OrderStatus, Partial<Record<OrderStatus, Party>>>> = {
-  PENDING: { CONFIRMED: 'seller', CANCELLED: 'seller' },
-  CONFIRMED: { FULFILLED: 'seller', CANCELLED: 'buyer' },
+  PENDING: { CONFIRMED: 'seller', CANCELLED: 'either' },
+  CONFIRMED: { FULFILLED: 'seller', CANCELLED: 'either' },
   FULFILLED: { COMPLETED: 'buyer' },
 };
 
-const canAct = (order: { buyerId: string; sellerId: string }, actor: AuthUser, party: Party) =>
-  actor.role === 'ADMIN' || (party === 'buyer' ? actor.id === order.buyerId : actor.id === order.sellerId);
+const canAct = (order: { buyerId: string; sellerId: string }, actor: AuthUser, party: Party) => {
+  if (actor.role === 'ADMIN') return true;
+  if (party === 'either') return actor.id === order.buyerId || actor.id === order.sellerId;
+  return party === 'buyer' ? actor.id === order.buyerId : actor.id === order.sellerId;
+};
+
+type Tx = Prisma.TransactionClient;
+type CancellableOrder = { listingId: string; auctionId: string | null; quantity: number };
+
+// ORD-04: a cancelled order hands its units back. A sold-out listing reopens as ACTIVE. For an
+// auction order the auction becomes CANCELLED (terminal) so its bids and winner are never reused;
+// selling the lot again needs a fresh auction, which is a separate seller action.
+const restock = async (tx: Tx, order: CancellableOrder) => {
+  await tx.listing.update({
+    where: { id: order.listingId },
+    data: { quantityAvailable: { increment: order.quantity } },
+  });
+  await tx.listing.updateMany({
+    where: { id: order.listingId, status: 'SOLD' },
+    data: { status: 'ACTIVE' },
+  });
+  if (order.auctionId) {
+    await tx.auction.update({ where: { id: order.auctionId }, data: { status: 'CANCELLED' } });
+  }
+};
 
 /**
- * ORD-03/04. The order's row is not explicitly locked: the guard lives in the UPDATE's WHERE
- * (`status: order.status`), so two concurrent status changes on the same order can't both
- * succeed — the second sees `count !== 1` and fails closed with 409, same pattern as
- * `listing.service.updateListing`.
+ * ORD-03/04. The guard lives in the UPDATE's WHERE (`status: order.status`), so two concurrent
+ * status changes on the same order can't both succeed: the second sees `count !== 1` and fails
+ * closed with 409. A cancel also takes the auction lock (auction orders) and then the listing
+ * lock, the same order as delist/close, so the restock cannot race a bid, close or offer accept.
  */
 export const updateOrderStatus = async (
   orderId: string,
@@ -125,7 +150,15 @@ export const updateOrderStatus = async (
 ): Promise<OrderView> => {
   const order = await prisma.order.findUnique({
     where: { id: orderId },
-    select: { id: true, buyerId: true, sellerId: true, status: true },
+    select: {
+      id: true,
+      buyerId: true,
+      sellerId: true,
+      status: true,
+      listingId: true,
+      auctionId: true,
+      quantity: true,
+    },
   });
   const isParty = order && (actor.id === order.buyerId || actor.id === order.sellerId);
   if (!order || (!isParty && actor.role !== 'ADMIN')) throw ApiError.notFound('Order not found');
@@ -138,23 +171,44 @@ export const updateOrderStatus = async (
     throw ApiError.forbidden(`Only the ${party} can do that`);
   }
 
-  const { count } = await prisma.order.updateMany({
-    where: { id: orderId, status: order.status },
-    data: {
-      status: input.status,
-      ...(input.status === 'FULFILLED' ? { fulfilledAt: new Date() } : {}),
-      ...(input.status === 'COMPLETED' ? { completedAt: new Date() } : {}),
-    },
-  });
-  if (count !== 1) throw ApiError.conflict('Order status changed concurrently, please retry');
+  const cancelling = input.status === 'CANCELLED';
+  await prisma.$transaction(async (tx) => {
+    if (cancelling) {
+      if (order.auctionId) await lockAuction(tx, order.auctionId);
+      await lockListing(tx, order.listingId);
+    }
 
-  const other = actor.id === order.buyerId ? order.sellerId : order.buyerId;
-  await createNotification({
-    userId: other,
-    type: 'ORDER_STATUS_CHANGED',
-    message: `Order status changed to ${input.status}`,
-    relatedEntityType: 'ORDER',
-    relatedEntityId: orderId,
+    const { count } = await tx.order.updateMany({
+      where: { id: orderId, status: order.status },
+      data: {
+        status: input.status,
+        ...(input.status === 'FULFILLED' ? { fulfilledAt: new Date() } : {}),
+        ...(input.status === 'COMPLETED' ? { completedAt: new Date() } : {}),
+      },
+    });
+    if (count !== 1) throw ApiError.conflict('Order status changed concurrently, please retry');
+
+    if (cancelling) await restock(tx, order);
+
+    // An admin acting on the order is neither party, so both are told.
+    const recipients =
+      actor.id === order.buyerId
+        ? [order.sellerId]
+        : actor.id === order.sellerId
+          ? [order.buyerId]
+          : [order.buyerId, order.sellerId];
+    for (const userId of recipients) {
+      await createNotification(
+        {
+          userId,
+          type: 'ORDER_STATUS_CHANGED',
+          message: `Order status changed to ${input.status}`,
+          relatedEntityType: 'ORDER',
+          relatedEntityId: orderId,
+        },
+        tx,
+      );
+    }
   });
 
   return getOrder(orderId, actor);

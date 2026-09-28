@@ -44,10 +44,13 @@ enum OfferStatus {
   EXPIRED
 }
 
+// CANCELLED: terminal. The auction's order was cancelled (ORD-04); its bids and winner must not
+// be reused, and any new sale of the listing needs a fresh auction.
 enum AuctionStatus {
   SCHEDULED
   ACTIVE
   ENDED
+  CANCELLED
 }
 
 enum OrderSource {

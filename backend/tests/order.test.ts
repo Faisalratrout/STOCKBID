@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../src/app';
 import { prisma } from '../src/config/db';
+import { signAccessToken } from '../src/utils/tokens';
 import { updateOrderStatusSchema } from '../src/validators/order.validators';
 import { isDbReady } from './helpers/db';
 
@@ -42,7 +43,7 @@ describe.skipIf(!dbReady)('orders (needs Postgres with migrations applied)', () 
   };
 
   /** Cheapest reliable way to get a real PENDING order: an offer, made then accepted. */
-  const newOrder = async () => {
+  const newOfferOrder = async (quantity = 5, take = 2) => {
     const listingRes = await request(app)
       .post('/api/listings')
       .set(seller.auth)
@@ -51,7 +52,7 @@ describe.skipIf(!dbReady)('orders (needs Postgres with migrations applied)', () 
         description: 'Overstock pallet for order tests',
         categoryId,
         condition: 'NEW',
-        quantity: 5,
+        quantity,
         location: 'Amman',
         sellingMethod: 'OFFER',
         startingPrice: 100,
@@ -62,15 +63,23 @@ describe.skipIf(!dbReady)('orders (needs Postgres with migrations applied)', () 
     const offerRes = await request(app)
       .post('/api/offers')
       .set(buyer.auth)
-      .send({ listingId, quantity: 2, price: 90 });
+      .send({ listingId, quantity: take, price: 90 });
     const offerId = offerRes.body.data.id as string;
 
     const acceptRes = await request(app)
       .post(`/api/offers/${offerId}/accept`)
       .set(seller.auth)
       .send();
-    return acceptRes.body.data.orderId as string;
+    return { orderId: acceptRes.body.data.orderId as string, listingId };
   };
+
+  const newOrder = async () => (await newOfferOrder()).orderId;
+
+  const listingState = (id: string) =>
+    prisma.listing.findUniqueOrThrow({
+      where: { id },
+      select: { quantityAvailable: true, status: true },
+    });
 
   const setStatus = (s: Session, orderId: string, status: string) =>
     request(app).patch(`/api/orders/${orderId}/status`).set(s.auth).send({ status });
@@ -139,24 +148,90 @@ describe.skipIf(!dbReady)('orders (needs Postgres with migrations applied)', () 
     expect((await setStatus(seller, orderId, 'CANCELLED')).status).toBe(409);
   });
 
-  it('ORD-04: seller can cancel a pending order; a buyer cannot cancel once confirmed', async () => {
-    const a = await newOrder();
-    expect((await setStatus(seller, a, 'CANCELLED')).status).toBe(200);
-
-    const b = await newOrder();
-    await setStatus(seller, b, 'CONFIRMED');
-    expect((await setStatus(seller, b, 'CANCELLED')).status).toBe(403);
-    expect((await setStatus(buyer, b, 'CANCELLED')).status).toBe(200);
+  it('ORD-04: either party can cancel while PENDING or CONFIRMED', async () => {
+    for (const from of ['PENDING', 'CONFIRMED'] as const) {
+      for (const who of [buyer, seller]) {
+        const orderId = await newOrder();
+        if (from === 'CONFIRMED') await setStatus(seller, orderId, 'CONFIRMED');
+        const res = await setStatus(who, orderId, 'CANCELLED');
+        expect(res.status).toBe(200);
+        expect(res.body.data.status).toBe('CANCELLED');
+      }
+    }
   });
 
-  it('ORD-04: two concurrent status changes on the same order: exactly one wins', async () => {
+  it('ORD-04: nobody can cancel once FULFILLED, and outsiders never can', async () => {
     const orderId = await newOrder();
+    expect((await setStatus(outsider, orderId, 'CANCELLED')).status).toBe(404);
+    await setStatus(seller, orderId, 'CONFIRMED');
+    await setStatus(seller, orderId, 'FULFILLED');
+    expect((await setStatus(buyer, orderId, 'CANCELLED')).status).toBe(409);
+    expect((await setStatus(seller, orderId, 'CANCELLED')).status).toBe(409);
+  });
+
+  it('ORD-04: cancelling an offer order returns its units to the listing', async () => {
+    const { orderId, listingId } = await newOfferOrder(5, 2);
+    expect(await listingState(listingId)).toEqual({ quantityAvailable: 3, status: 'ACTIVE' });
+    expect((await setStatus(buyer, orderId, 'CANCELLED')).status).toBe(200);
+    expect(await listingState(listingId)).toEqual({ quantityAvailable: 5, status: 'ACTIVE' });
+  });
+
+  it('ORD-04: cancelling the order that sold a listing out reopens it as ACTIVE', async () => {
+    const { orderId, listingId } = await newOfferOrder(4, 4);
+    expect(await listingState(listingId)).toEqual({ quantityAvailable: 0, status: 'SOLD' });
+    await setStatus(seller, orderId, 'CONFIRMED');
+    expect((await setStatus(seller, orderId, 'CANCELLED')).status).toBe(200);
+    expect(await listingState(listingId)).toEqual({ quantityAvailable: 4, status: 'ACTIVE' });
+  });
+
+  it('ORD-04: buyer and seller cancelling at once: one wins and stock comes back once', async () => {
+    const { orderId, listingId } = await newOfferOrder(5, 2);
     const results = await Promise.all([
-      setStatus(seller, orderId, 'CONFIRMED'),
+      setStatus(buyer, orderId, 'CANCELLED'),
       setStatus(seller, orderId, 'CANCELLED'),
     ]);
     expect(results.map((r) => r.status).sort()).toEqual([200, 409]);
-    const final = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
-    expect(['CONFIRMED', 'CANCELLED']).toContain(final.status);
+    expect(await listingState(listingId)).toEqual({ quantityAvailable: 5, status: 'ACTIVE' });
+  });
+
+  it('ORD-04: two concurrent identical status changes on the same order: exactly one wins', async () => {
+    const orderId = await newOrder();
+    const results = await Promise.all([
+      setStatus(seller, orderId, 'CONFIRMED'),
+      setStatus(seller, orderId, 'CONFIRMED'),
+    ]);
+    // The loser either fails the WHERE guard or sees CONFIRMED -> CONFIRMED: 409 both ways.
+    expect(results.map((r) => r.status).sort()).toEqual([200, 409]);
+    expect((await prisma.order.findUniqueOrThrow({ where: { id: orderId } })).status).toBe(
+      'CONFIRMED',
+    );
+  });
+
+  it('ORD-03: an admin status change notifies both the buyer and the seller', async () => {
+    const admin = await prisma.user.create({
+      data: {
+        email: `ord-it-${runId}-admin@test.example`,
+        passwordHash: 'not-used',
+        role: 'ADMIN',
+        isEmailVerified: true,
+      },
+    });
+    const adminAuth = {
+      Authorization: `Bearer ${signAccessToken({ id: admin.id, role: 'ADMIN' })}`,
+    };
+    const orderId = await newOrder();
+    const res = await request(app)
+      .patch(`/api/orders/${orderId}/status`)
+      .set(adminAuth)
+      .send({ status: 'CONFIRMED' });
+    expect(res.status).toBe(200);
+
+    for (const userId of [buyer.id, seller.id]) {
+      expect(
+        await prisma.notification.count({
+          where: { userId, type: 'ORDER_STATUS_CHANGED', relatedEntityId: orderId },
+        }),
+      ).toBe(1);
+    }
   });
 });
