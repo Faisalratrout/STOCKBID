@@ -3,6 +3,7 @@ import { prisma } from '../config/db';
 import { ApiError } from '../utils/ApiError';
 import { pageMeta } from '../utils/ApiResponse';
 import { lockAuction } from '../utils/locks';
+import { logger } from '../utils/logger';
 import { perUnit } from '../utils/money';
 import type { AuthUser } from '../types/express';
 import type { AuctionView, BidView, Paginated } from '../types/dto';
@@ -246,4 +247,29 @@ export const closeAuction = async (auctionId: string): Promise<CloseResult> => {
 
   if (!outcome.alreadyClosed) emitAuctionEnded(auctionId, { auctionId, winner: outcome.winner });
   return { auctionId, endedAt: !outcome.alreadyClosed };
+};
+
+const SWEEP_BATCH = 100;
+
+/**
+ * AUC-05 recovery: closes every ACTIVE auction already past endAt (a lost, failed or never-queued
+ * close job). Safe to overlap with the close job because closeAuction is idempotent under the
+ * auction lock. One failing auction is logged and does not stop the rest. Returns how many closed.
+ */
+export const sweepOverdueAuctions = async (now = new Date()): Promise<number> => {
+  const overdue = await prisma.auction.findMany({
+    where: { status: 'ACTIVE', endAt: { lte: now } },
+    select: { id: true },
+    orderBy: { endAt: 'asc' },
+    take: SWEEP_BATCH,
+  });
+  let closed = 0;
+  for (const { id } of overdue) {
+    try {
+      if ((await closeAuction(id)).endedAt) closed++;
+    } catch (err) {
+      logger.error('auction sweep: close failed', { auctionId: id, err: String(err) });
+    }
+  }
+  return closed;
 };

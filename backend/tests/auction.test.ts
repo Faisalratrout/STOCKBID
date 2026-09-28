@@ -1,8 +1,9 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../src/app';
 import { prisma } from '../src/config/db';
-import { closeAuction } from '../src/services/auction.service';
+import { auctionCloseQueue } from '../src/jobs/auctionClose.job';
+import { closeAuction, sweepOverdueAuctions } from '../src/services/auction.service';
 import { placeBidSchema } from '../src/validators/auction.validators';
 import { isDbReady } from './helpers/db';
 
@@ -309,6 +310,52 @@ describe.skipIf(!dbReady)('auctions (needs Postgres with migrations applied)', (
     const order = await prisma.order.findFirstOrThrow({ where: { auctionId } });
     expect(order.buyerId).toBe(buyerA.id);
     expect(order.agreedPrice.toString()).toBe('40');
+  });
+
+  it('AUC-05: the close job is queued with retries and exponential backoff', async () => {
+    const add = vi.spyOn(auctionCloseQueue, 'add');
+    try {
+      const { auctionId } = await newAuctionListing(1, 5, 30);
+      expect(add).toHaveBeenCalledWith(
+        'close',
+        { auctionId },
+        expect.objectContaining({
+          jobId: auctionId,
+          attempts: 5,
+          backoff: { type: 'exponential', delay: 5_000 },
+        }),
+      );
+    } finally {
+      add.mockRestore();
+    }
+  });
+
+  it('AUC-01: a queue failure after commit still returns 201 and leaves the auction for the sweep', async () => {
+    const add = vi
+      .spyOn(auctionCloseQueue, 'add')
+      .mockRejectedValueOnce(new Error('Redis unavailable'));
+    try {
+      const { listingId, auctionId } = await newAuctionListing(1, 5, 30);
+      expect(listingId).toBeTruthy();
+      expect((await auctionState(auctionId)).status).toBe('ACTIVE');
+    } finally {
+      add.mockRestore();
+    }
+  });
+
+  it('AUC-05: the sweep closes an overdue auction whose job never ran, and overlapping sweeps create one order', async () => {
+    const { listingId, auctionId } = await newAuctionListing(2, 5, 100, Date.now() + 700);
+    expect((await bid(buyerA, auctionId, 100)).status).toBe(200);
+    await new Promise((r) => setTimeout(r, 800));
+
+    await Promise.all([sweepOverdueAuctions(), sweepOverdueAuctions()]);
+
+    expect((await auctionState(auctionId)).status).toBe('ENDED');
+    expect(await prisma.order.count({ where: { auctionId } })).toBe(1);
+    expect(await listingStatus(listingId)).toBe('SOLD');
+    // A later sweep finds nothing left to do for it.
+    await sweepOverdueAuctions();
+    expect(await prisma.order.count({ where: { auctionId } })).toBe(1);
   });
 
   it('AUC-05: closing an auction with no bids ends it without creating an order', async () => {

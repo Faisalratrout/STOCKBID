@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../config/db';
 import { ApiError } from '../utils/ApiError';
 import { lockAuction } from '../utils/locks';
+import { logger } from '../utils/logger';
 import { pageMeta } from '../utils/ApiResponse';
 import type { AuthUser } from '../types/express';
 import type { ListingCard, ListingDetail, Paginated } from '../types/dto';
@@ -67,8 +68,19 @@ export const createListing = async (
     select: listingDetailSelect,
   });
 
-  // AUC-01: schedule the close job once the auction row exists and has committed.
-  if (listing.auction) await onAuctionCreated(listing.auction.id, listing.auction.endAt);
+  // AUC-01: schedule the close job once the auction row exists and has committed. The listing
+  // is already created, so a queue failure must not surface as a failed create (clients would
+  // retry and duplicate it); sweepOverdueAuctions closes the auction instead.
+  if (listing.auction) {
+    try {
+      await onAuctionCreated(listing.auction.id, listing.auction.endAt);
+    } catch (err) {
+      logger.error('Failed to schedule auction close; the sweep will close it', {
+        auctionId: listing.auction.id,
+        err: String(err),
+      });
+    }
+  }
   return listing;
 };
 

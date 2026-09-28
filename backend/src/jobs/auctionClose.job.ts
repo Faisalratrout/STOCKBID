@@ -15,12 +15,21 @@ export const auctionCloseQueue = new Queue<AuctionCloseJobData>(AUCTION_CLOSE_QU
   connection: redis,
 });
 
+// Retries cover transient DB failures. A job that still fails keeps its jobId, so re-adding it
+// is a no-op: the maintenance sweep (sweepOverdueAuctions) is what recovers those.
 export const scheduleAuctionClose = async (auctionId: string, endAt: Date) => {
   const delay = Math.max(0, endAt.getTime() - Date.now());
   await auctionCloseQueue.add(
     'close',
     { auctionId },
-    { jobId: auctionId, delay, removeOnComplete: true, removeOnFail: 1000 },
+    {
+      jobId: auctionId,
+      delay,
+      attempts: 5,
+      backoff: { type: 'exponential', delay: 5_000 },
+      removeOnComplete: true,
+      removeOnFail: 1000,
+    },
   );
 };
 
@@ -35,7 +44,11 @@ export const startAuctionCloseWorker = () => {
     { connection: redis.duplicate() },
   );
   worker.on('failed', (job, err) => {
-    logger.error('auction-close job failed', { auctionId: job?.data.auctionId, err: String(err) });
+    logger.error('auction-close job failed', {
+      auctionId: job?.data.auctionId,
+      attempt: job?.attemptsMade,
+      err: String(err),
+    });
   });
   return worker;
 };
