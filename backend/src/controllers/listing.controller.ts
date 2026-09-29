@@ -30,6 +30,13 @@ export const delist = asyncHandler(async (req, res) => {
   noContent(res);
 });
 
+export const relistAuction = asyncHandler(async (req, res) => {
+  created(
+    res,
+    await listingService.relistAuction(String(req.params.id), requireUser(req).id, req.body),
+  );
+});
+
 export const addImage = asyncHandler(async (req, res) => {
   created(res, await listingService.addImage(String(req.params.id), requireUser(req).id, req.file));
 });

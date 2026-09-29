@@ -1,7 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../config/db';
 import { ApiError } from '../utils/ApiError';
-import { lockAuction } from '../utils/locks';
+import { lockAuction, lockListing } from '../utils/locks';
 import { logger } from '../utils/logger';
 import { pageMeta } from '../utils/ApiResponse';
 import type { AuthUser } from '../types/express';
@@ -11,6 +11,7 @@ import type {
   BrowseQuery,
   CreateListingInput,
   MineQuery,
+  RelistAuctionInput,
   UpdateListingInput,
 } from '../validators/listing.validators';
 import { uploadImage } from './media.service';
@@ -269,6 +270,77 @@ export const delistListing = async (id: string, sellerId: string): Promise<void>
       });
     }
   });
+};
+
+// An auction that can take no more bids and sold nothing: its order was cancelled (ORD-04), or
+// it closed with no bids. A delisted listing's auction also matches, but its listing is not ACTIVE.
+const isUnsold = (a: { status: string; winningBidId: string | null } | null) =>
+  !!a && (a.status === 'CANCELLED' || (a.status === 'ENDED' && a.winningBidId === null));
+
+/**
+ * STK-02 / AUC-01: starts a fresh auction on an ACTIVE auction listing whose current auction is
+ * unsold and whose whole lot is back in stock. The old auction keeps its bids and orders; the
+ * listing is repointed at the new one, its expiry moves to the new endAt, and it may be repriced.
+ * Takes the old auction's lock then the listing's, the same order as delist/close/cancel.
+ */
+export const relistAuction = async (
+  id: string,
+  sellerId: string,
+  input: RelistAuctionInput,
+): Promise<ListingDetail> => {
+  await loadOwned(id, sellerId);
+  const listing = await prisma.$transaction(async (tx) => {
+    const { auctionId } = await tx.listing.findUniqueOrThrow({
+      where: { id },
+      select: { auctionId: true },
+    });
+    if (auctionId) await lockAuction(tx, auctionId);
+    await lockListing(tx, id);
+
+    const current = await tx.listing.findUniqueOrThrow({
+      where: { id },
+      select: {
+        sellingMethod: true,
+        status: true,
+        quantityTotal: true,
+        quantityAvailable: true,
+        startingPrice: true,
+        auctionId: true,
+        auction: { select: { status: true, winningBidId: true } },
+      },
+    });
+    // A concurrent relist that got the lock first has already repointed the listing.
+    const relistable =
+      current.sellingMethod === 'AUCTION' &&
+      current.status === 'ACTIVE' &&
+      current.quantityAvailable === current.quantityTotal &&
+      current.auctionId === auctionId &&
+      isUnsold(current.auction);
+    if (!relistable) {
+      throw ApiError.conflict(
+        'Only an active auction listing whose last auction was cancelled or ended unsold can be relisted',
+      );
+    }
+
+    const startingPrice = input.startingPrice ?? current.startingPrice;
+    const auction = await tx.auction.create({
+      data: {
+        listingId: id,
+        startingBid: startingPrice,
+        minIncrement: input.minIncrement,
+        endAt: input.endAt,
+      },
+      select: { id: true },
+    });
+    return tx.listing.update({
+      where: { id },
+      data: { auctionId: auction.id, expiresAt: input.endAt, startingPrice },
+      select: listingDetailSelect,
+    });
+  });
+
+  await scheduleCloseAfterCommit(listing.auction!);
+  return listing;
 };
 
 /** STK-05 */

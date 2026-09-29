@@ -5,7 +5,7 @@ type Tx = Prisma.TransactionClient;
 
 // Row locks (SELECT ... FOR UPDATE) held until the surrounding transaction ends. When one
 // transaction needs both, it must take the auction lock before the listing lock: delist,
-// auction close and auction-order cancel all follow that order, so they cannot deadlock.
+// relist, auction close and auction-order cancel all follow that order, so they cannot deadlock.
 
 export const lockAuction = async (tx: Tx, auctionId: string) => {
   const rows = await tx.$queryRaw<{ id: string }[]>`

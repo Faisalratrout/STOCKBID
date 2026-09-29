@@ -32,7 +32,11 @@ describe.skipIf(!dbReady)('auctions (needs Postgres with migrations applied)', (
   let buyerB: Session;
   let outsiderSeller: Session;
 
-  const register = async (role: 'BUYER' | 'SELLER', tag: string, verified = true): Promise<Session> => {
+  const register = async (
+    role: 'BUYER' | 'SELLER',
+    tag: string,
+    verified = true,
+  ): Promise<Session> => {
     const res = await request(app)
       .post('/api/auth/register')
       .send({
@@ -161,9 +165,7 @@ describe.skipIf(!dbReady)('auctions (needs Postgres with migrations applied)', (
     const { auctionId } = await newAuctionListing(4, 10, 40);
     await bid(buyerA, auctionId, 40);
     await bid(buyerB, auctionId, 50);
-    const res = await request(app)
-      .get(`/api/auctions/${auctionId}/bids`)
-      .set(seller.auth);
+    const res = await request(app).get(`/api/auctions/${auctionId}/bids`).set(seller.auth);
     expect(res.body.data.map((b: { amount: string }) => b.amount)).toEqual(['50', '40']);
     expect(res.body.data[0].amountPerUnit).toBe('12.5');
   });
@@ -433,5 +435,191 @@ describe.skipIf(!dbReady)('auctions (needs Postgres with migrations applied)', (
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe('EMAIL_NOT_VERIFIED');
     expect(await prisma.bid.count({ where: { auctionId } })).toBe(0);
+  });
+
+  // STK-02 relist: a fresh auction on a listing whose last one was cancelled or ended unsold.
+  const relist = (listingId: string, body: object, s: Session = seller) =>
+    request(app).post(`/api/listings/${listingId}/auctions`).set(s.auth).send(body);
+
+  const inADay = () => new Date(Date.now() + 86_400_000).toISOString();
+
+  const cancelledAuctionListing = async () => {
+    const { listingId, auctionId } = await newAuctionListing(3, 5, 100);
+    await bid(buyerA, auctionId, 100);
+    await closeAuction(auctionId);
+    const order = await prisma.order.findFirstOrThrow({ where: { auctionId } });
+    await request(app)
+      .patch(`/api/orders/${order.id}/status`)
+      .set(buyerA.auth)
+      .send({ status: 'CANCELLED' });
+    return { listingId, auctionId, orderId: order.id };
+  };
+
+  it('STK-02: after a cancelled auction order the seller can relist at a new price, and the listing is browsable again', async () => {
+    const { listingId, auctionId: oldAuctionId } = await cancelledAuctionListing();
+    const endAt = inADay();
+
+    const res = await relist(listingId, { minIncrement: 2, endAt, startingPrice: 80 });
+    expect(res.status).toBe(201);
+    const newAuctionId = res.body.data.auction.id as string;
+    expect(newAuctionId).not.toBe(oldAuctionId);
+    expect(res.body.data.auction).toMatchObject({
+      status: 'ACTIVE',
+      startingBid: '80',
+      minIncrement: '2',
+      currentBid: null,
+    });
+    expect(res.body.data).toMatchObject({
+      startingPrice: '80',
+      status: 'ACTIVE',
+      expiresAt: endAt,
+    });
+    expect((await auctionState(oldAuctionId)).status).toBe('CANCELLED');
+
+    const browse = await request(app).get('/api/listings').query({ categoryId });
+    expect(browse.body.data.map((l: { id: string }) => l.id)).toContain(listingId);
+  });
+
+  it('STK-02: the relisted auction sells normally while the old auction and its cancelled order stay untouched', async () => {
+    const {
+      listingId,
+      auctionId: oldAuctionId,
+      orderId: oldOrderId,
+    } = await cancelledAuctionListing();
+    const newAuctionId = (await relist(listingId, { minIncrement: 5, endAt: inADay() })).body.data
+      .auction.id as string;
+
+    expect((await bid(buyerB, oldAuctionId, 500)).status).toBe(409);
+    expect((await bid(buyerB, newAuctionId, 100)).status).toBe(200);
+    await closeAuction(newAuctionId);
+
+    const newOrder = await prisma.order.findFirstOrThrow({ where: { auctionId: newAuctionId } });
+    expect(newOrder).toMatchObject({ buyerId: buyerB.id, quantity: 3, status: 'PENDING' });
+    expect(newOrder.totalPrice.toString()).toBe('100');
+    expect(
+      await prisma.order.findUniqueOrThrow({
+        where: { id: oldOrderId },
+        select: { status: true, auctionId: true },
+      }),
+    ).toEqual({ status: 'CANCELLED', auctionId: oldAuctionId });
+    expect(await listingStatus(listingId)).toBe('SOLD');
+  });
+
+  it('STK-02: an auction that ended with no bids can be relisted, keeping the price when none is given', async () => {
+    const { listingId, auctionId } = await newAuctionListing(2, 5, 70);
+    await closeAuction(auctionId);
+    expect((await auctionState(auctionId)).status).toBe('ENDED');
+
+    const res = await relist(listingId, { minIncrement: 5, endAt: inADay() });
+    expect(res.status).toBe(201);
+    expect(res.body.data.auction).toMatchObject({ status: 'ACTIVE', startingBid: '70' });
+    expect(res.body.data.startingPrice).toBe('70');
+  });
+
+  it('STK-02/AUC-01: relisting queues a close job for the new auction', async () => {
+    const { listingId } = await cancelledAuctionListing();
+    const add = vi.spyOn(auctionCloseQueue, 'add');
+    try {
+      const res = await relist(listingId, { minIncrement: 5, endAt: inADay() });
+      expect(res.status).toBe(201);
+      expect(add).toHaveBeenCalledWith(
+        'close',
+        { auctionId: res.body.data.auction.id },
+        expect.objectContaining({ jobId: res.body.data.auction.id }),
+      );
+    } finally {
+      add.mockRestore();
+    }
+  });
+
+  it('STK-02: relisting is refused while the auction is live, sold or delisted, and for offer listings', async () => {
+    const body = { minIncrement: 5, endAt: inADay() };
+
+    const live = await newAuctionListing(1, 5, 100);
+    expect((await relist(live.listingId, body)).status).toBe(409);
+
+    // Sold: the order is still PENDING, so the lot is not back in stock.
+    const sold = await newAuctionListing(1, 5, 100);
+    await bid(buyerA, sold.auctionId, 100);
+    await closeAuction(sold.auctionId);
+    expect((await relist(sold.listingId, body)).status).toBe(409);
+
+    // Delisting ends the auction with no winner, but the listing is no longer ACTIVE.
+    const delisted = await newAuctionListing(1, 5, 100);
+    const del = await request(app).delete(`/api/listings/${delisted.listingId}`).set(seller.auth);
+    expect(del.status).toBe(204);
+    expect((await relist(delisted.listingId, body)).status).toBe(409);
+
+    const offer = await request(app)
+      .post('/api/listings')
+      .set(seller.auth)
+      .send({
+        title: `auc-it-${runId} offer lot`,
+        description: 'Overstock pallet sold by offer',
+        categoryId,
+        condition: 'NEW',
+        quantity: 1,
+        location: 'Amman',
+        sellingMethod: 'OFFER',
+        startingPrice: 100,
+        handoverMethod: 'PICKUP',
+      });
+    expect((await relist(offer.body.data.id, body)).status).toBe(409);
+
+    expect(await prisma.auction.count({ where: { listingId: live.listingId } })).toBe(1);
+    expect(await prisma.auction.count({ where: { listingId: sold.listingId } })).toBe(1);
+    expect(await prisma.auction.count({ where: { listingId: delisted.listingId } })).toBe(1);
+  });
+
+  it('STK-02: only the verified owning seller can relist, with a future end time', async () => {
+    const { listingId } = await cancelledAuctionListing();
+    const body = { minIncrement: 5, endAt: inADay() };
+
+    expect((await relist(listingId, body, outsiderSeller)).status).toBe(403);
+    expect((await relist(listingId, body, buyerA)).status).toBe(403);
+    const past = await relist(listingId, {
+      minIncrement: 5,
+      endAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    expect(past.status).toBe(422);
+
+    await prisma.user.update({ where: { id: seller.id }, data: { isEmailVerified: false } });
+    try {
+      const unverified = await relist(listingId, body);
+      expect(unverified.status).toBe(403);
+      expect(unverified.body.error.code).toBe('EMAIL_NOT_VERIFIED');
+    } finally {
+      await markEmailVerified(seller.id);
+    }
+
+    expect(await prisma.auction.count({ where: { listingId } })).toBe(1);
+  });
+
+  it('STK-02: two relists at the same time: exactly one new auction is created', async () => {
+    const { listingId } = await cancelledAuctionListing();
+    const body = { minIncrement: 5, endAt: inADay() };
+
+    const results = await Promise.all([relist(listingId, body), relist(listingId, body)]);
+
+    expect(results.map((r) => r.status).sort()).toEqual([201, 409]);
+    expect(await prisma.auction.count({ where: { listingId } })).toBe(2);
+    expect(await prisma.auction.count({ where: { listingId, status: 'ACTIVE' } })).toBe(1);
+    const winner = results.find((r) => r.status === 201)!;
+    const { auctionId } = await prisma.listing.findUniqueOrThrow({
+      where: { id: listingId },
+      select: { auctionId: true },
+    });
+    expect(auctionId).toBe(winner.body.data.auction.id);
+  });
+
+  it('STK-04: delisting a relisted listing ends its new auction, which then rejects bids', async () => {
+    const { listingId } = await cancelledAuctionListing();
+    const newAuctionId = (await relist(listingId, { minIncrement: 5, endAt: inADay() })).body.data
+      .auction.id as string;
+
+    const del = await request(app).delete(`/api/listings/${listingId}`).set(seller.auth);
+    expect(del.status).toBe(204);
+    expect((await auctionState(newAuctionId)).status).toBe('ENDED');
+    expect((await bid(buyerA, newAuctionId, 100)).status).toBe(409);
   });
 });

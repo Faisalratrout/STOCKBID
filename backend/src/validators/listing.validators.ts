@@ -50,6 +50,14 @@ export const updateListingSchema = z
   .partial()
   .refine((v) => Object.keys(v).length > 0, 'Provide at least one field to update');
 
+// STK-02: a fresh auction on a listing whose last one was cancelled or ended unsold. The
+// starting price may be changed; if omitted the listing's current one is kept.
+export const relistAuctionSchema = z.object({
+  minIncrement: money,
+  endAt: futureDate,
+  startingPrice: money.optional(),
+});
+
 export const listingIdParamSchema = idParamSchema;
 export const listingImageParamSchema = z.object({ id: z.uuid(), imageId: z.uuid() });
 
@@ -81,5 +89,6 @@ export const mineQuerySchema = z.object({
 
 export type CreateListingInput = z.infer<typeof createListingSchema>;
 export type UpdateListingInput = z.infer<typeof updateListingSchema>;
+export type RelistAuctionInput = z.infer<typeof relistAuctionSchema>;
 export type BrowseQuery = z.infer<typeof browseQuerySchema>;
 export type MineQuery = z.infer<typeof mineQuerySchema>;

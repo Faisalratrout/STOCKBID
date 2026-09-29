@@ -11,6 +11,7 @@ import {
   listingIdParamSchema,
   listingImageParamSchema,
   mineQuerySchema,
+  relistAuctionSchema,
   updateListingSchema,
 } from '../validators/listing.validators';
 
@@ -41,6 +42,13 @@ listingRoutes.patch(
   ctrl.update,
 );
 listingRoutes.delete('/:id', ...seller, validate({ params: listingIdParamSchema }), ctrl.delist);
+listingRoutes.post(
+  '/:id/auctions',
+  ...seller,
+  requireVerifiedEmail,
+  validate({ params: listingIdParamSchema, body: relistAuctionSchema }),
+  ctrl.relistAuction,
+);
 listingRoutes.post(
   '/:id/images',
   ...seller,
