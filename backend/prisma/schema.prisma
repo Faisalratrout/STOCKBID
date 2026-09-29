@@ -221,7 +221,11 @@ model Listing {
   updatedAt         DateTime         @updatedAt
   images            ListingImage[]
   offers            Offer[]
-  auction           Auction?
+  // STK-02: the listing's current auction. Earlier auctions (cancelled, or ended with no bids)
+  // stay in `auctions` with their bids and orders; relisting creates a new row and repoints this.
+  auctionId         String?          @unique
+  auction           Auction?         @relation("CurrentAuction", fields: [auctionId], references: [id])
+  auctions          Auction[]        @relation("ListingAuctions")
   orders            Order[]
   reports           Report[]
 
@@ -265,8 +269,9 @@ model Offer {
 
 model Auction {
   id           String        @id @default(uuid())
-  listingId    String        @unique
-  listing      Listing       @relation(fields: [listingId], references: [id])
+  listingId    String
+  listing      Listing       @relation("ListingAuctions", fields: [listingId], references: [id])
+  currentFor   Listing?      @relation("CurrentAuction")
   startingBid  Decimal       @db.Decimal(12, 2)
   minIncrement Decimal       @db.Decimal(12, 2)
   currentBid   Decimal?      @db.Decimal(12, 2)
@@ -281,6 +286,7 @@ model Auction {
   order        Order?
 
   @@index([status, endAt])
+  @@index([listingId])
   @@map("auctions")
 }
 

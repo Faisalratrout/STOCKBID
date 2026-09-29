@@ -39,49 +39,59 @@ export const createListing = async (
   const isAuction = input.sellingMethod === 'AUCTION' && input.auction;
   const expiresAt = isAuction ? input.auction!.endAt : input.expiresAt;
 
-  const listing = await prisma.listing.create({
-    data: {
-      sellerId,
-      title: input.title,
-      description: input.description,
-      categoryId: input.categoryId,
-      condition: input.condition,
-      quantityTotal: input.quantity,
-      quantityAvailable: input.quantity,
-      location: input.location,
-      sellingMethod: input.sellingMethod,
-      startingPrice: input.startingPrice,
-      handoverMethod: input.handoverMethod,
-      expiresAt,
-      ...(isAuction
-        ? {
-            auction: {
-              create: {
-                startingBid: input.startingPrice,
-                minIncrement: input.auction!.minIncrement,
-                endAt: input.auction!.endAt,
-              },
-            },
-          }
-        : {}),
-    },
-    select: listingDetailSelect,
+  const data = {
+    sellerId,
+    title: input.title,
+    description: input.description,
+    categoryId: input.categoryId,
+    condition: input.condition,
+    quantityTotal: input.quantity,
+    quantityAvailable: input.quantity,
+    location: input.location,
+    sellingMethod: input.sellingMethod,
+    startingPrice: input.startingPrice,
+    handoverMethod: input.handoverMethod,
+    expiresAt,
+  };
+
+  if (!isAuction) return prisma.listing.create({ data, select: listingDetailSelect });
+
+  // The auction row needs the listing's id and the listing points back at it as its current
+  // auction, so this is three writes rather than one nested create.
+  const listing = await prisma.$transaction(async (tx) => {
+    const created = await tx.listing.create({ data, select: { id: true } });
+    const auction = await tx.auction.create({
+      data: {
+        listingId: created.id,
+        startingBid: input.startingPrice,
+        minIncrement: input.auction!.minIncrement,
+        endAt: input.auction!.endAt,
+      },
+      select: { id: true },
+    });
+    return tx.listing.update({
+      where: { id: created.id },
+      data: { auctionId: auction.id },
+      select: listingDetailSelect,
+    });
   });
 
-  // AUC-01: schedule the close job once the auction row exists and has committed. The listing
-  // is already created, so a queue failure must not surface as a failed create (clients would
-  // retry and duplicate it); sweepOverdueAuctions closes the auction instead.
-  if (listing.auction) {
-    try {
-      await onAuctionCreated(listing.auction.id, listing.auction.endAt);
-    } catch (err) {
-      logger.error('Failed to schedule auction close; the sweep will close it', {
-        auctionId: listing.auction.id,
-        err: String(err),
-      });
-    }
-  }
+  await scheduleCloseAfterCommit(listing.auction!);
   return listing;
+};
+
+// AUC-01: schedule the close job once the auction row exists and has committed. The listing
+// is already written, so a queue failure must not surface as a failed request (clients would
+// retry and duplicate it); sweepOverdueAuctions closes the auction instead.
+const scheduleCloseAfterCommit = async (auction: { id: string; endAt: Date }) => {
+  try {
+    await onAuctionCreated(auction.id, auction.endAt);
+  } catch (err) {
+    logger.error('Failed to schedule auction close; the sweep will close it', {
+      auctionId: auction.id,
+      err: String(err),
+    });
+  }
 };
 
 /** BRW-01..03, BRW-05 */
@@ -231,14 +241,20 @@ export const updateListing = async (
 export const delistListing = async (id: string, sellerId: string): Promise<void> => {
   await loadOwned(id, sellerId);
   await prisma.$transaction(async (tx) => {
-    const auction = await tx.auction.findUnique({ where: { listingId: id }, select: { id: true } });
-    if (auction) await lockAuction(tx, auction.id);
+    const { auctionId } = await tx.listing.findUniqueOrThrow({
+      where: { id },
+      select: { auctionId: true },
+    });
+    if (auctionId) await lockAuction(tx, auctionId);
 
     const { count } = await tx.listing.updateMany({
       where: {
         id,
         sellerId,
         status: 'ACTIVE',
+        // A relist between the read above and the lock would repoint the listing at an auction
+        // we don't hold the lock on; matching the locked id makes that a 409 instead.
+        auctionId,
         OR: [{ auction: { is: null } }, { auction: { is: { bids: { none: {} } } } }],
       },
       data: { status: 'DELISTED' },
@@ -246,9 +262,9 @@ export const delistListing = async (id: string, sellerId: string): Promise<void>
     if (count !== 1) {
       throw ApiError.conflict('Listing is not active or its auction already has bids');
     }
-    if (auction) {
+    if (auctionId) {
       await tx.auction.updateMany({
-        where: { id: auction.id, status: 'ACTIVE' },
+        where: { id: auctionId, status: 'ACTIVE' },
         data: { status: 'ENDED' },
       });
     }
