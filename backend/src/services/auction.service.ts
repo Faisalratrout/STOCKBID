@@ -141,7 +141,8 @@ export const placeBid = async (
   return auctionView;
 };
 
-type CloseResult = { auctionId: string; endedAt: boolean };
+/** `dueAt` is set when the auction is not over yet: nothing changed and the caller should retry then. */
+type CloseResult = { auctionId: string; endedAt: boolean; dueAt?: Date };
 
 /**
  * AUC-05/06/07. Invoked by the close-job worker (and safe to invoke more than once for the
@@ -153,6 +154,8 @@ export const closeAuction = async (auctionId: string): Promise<CloseResult> => {
     await lockAuction(tx, auctionId);
     const auction = await loadAuction(tx, auctionId);
     if (auction.status !== 'ACTIVE') return { alreadyClosed: true as const };
+    // AUC-05: a close job that fires early (clock skew between instances) must not end a live auction.
+    if (auction.endAt > new Date()) return { alreadyClosed: true as const, dueAt: auction.endAt };
 
     // A listing that is no longer ACTIVE (e.g. delisted before delist ended its auction) must
     // never be sold. End without a sale instead of throwing, or the job and the sweep would
@@ -247,7 +250,11 @@ export const closeAuction = async (auctionId: string): Promise<CloseResult> => {
   });
 
   if (!outcome.alreadyClosed) emitAuctionEnded(auctionId, { auctionId, winner: outcome.winner });
-  return { auctionId, endedAt: !outcome.alreadyClosed };
+  return {
+    auctionId,
+    endedAt: !outcome.alreadyClosed,
+    ...('dueAt' in outcome && { dueAt: outcome.dueAt }),
+  };
 };
 
 const SWEEP_BATCH = 100;

@@ -1,4 +1,4 @@
-import { Queue, Worker, type Job } from 'bullmq';
+import { DelayedError, Queue, Worker, type Job } from 'bullmq';
 import { redis } from '../config/redis';
 import { logger } from '../utils/logger';
 
@@ -33,16 +33,24 @@ export const scheduleAuctionClose = async (auctionId: string, endAt: Date) => {
   );
 };
 
+/**
+ * AUC-05: closes the auction, or moves this job back to its endAt if it fired early. Re-adding
+ * the job would be a no-op (same jobId, still active), so it is delayed in place instead.
+ */
+export const processAuctionCloseJob = async (job: Job<AuctionCloseJobData>, token?: string) => {
+  const { closeAuction } = await import('../services/auction.service');
+  const { dueAt } = await closeAuction(job.data.auctionId);
+  if (dueAt) {
+    await job.moveToDelayed(dueAt.getTime(), token);
+    throw new DelayedError();
+  }
+};
+
 /** Lazily imported so the worker never loads (and never opens a blocking connection) in tests. */
 export const startAuctionCloseWorker = () => {
-  const worker = new Worker<AuctionCloseJobData>(
-    AUCTION_CLOSE_QUEUE,
-    async (job: Job<AuctionCloseJobData>) => {
-      const { closeAuction } = await import('../services/auction.service');
-      await closeAuction(job.data.auctionId);
-    },
-    { connection: redis.duplicate() },
-  );
+  const worker = new Worker<AuctionCloseJobData>(AUCTION_CLOSE_QUEUE, processAuctionCloseJob, {
+    connection: redis.duplicate(),
+  });
   worker.on('failed', (job, err) => {
     logger.error('auction-close job failed', {
       auctionId: job?.data.auctionId,

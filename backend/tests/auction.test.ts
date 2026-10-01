@@ -2,7 +2,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../src/app';
 import { prisma } from '../src/config/db';
-import { auctionCloseQueue } from '../src/jobs/auctionClose.job';
+import { DelayedError, type Job } from 'bullmq';
+import { auctionCloseQueue, processAuctionCloseJob } from '../src/jobs/auctionClose.job';
 import { closeAuction, sweepOverdueAuctions } from '../src/services/auction.service';
 import { lockAuction } from '../src/utils/locks';
 import { placeBidSchema } from '../src/validators/auction.validators';
@@ -88,6 +89,15 @@ describe.skipIf(!dbReady)('auctions (needs Postgres with migrations applied)', (
       where: { id },
       select: { currentBid: true, status: true, winningBidId: true },
     });
+
+  const endNow = (id: string) =>
+    prisma.auction.update({ where: { id }, data: { endAt: new Date(Date.now() - 1_000) } });
+
+  // closeAuction refuses an auction before its endAt, so tests that close one end it first.
+  const closeNow = async (id: string) => {
+    await endNow(id);
+    return closeAuction(id);
+  };
 
   beforeAll(async () => {
     categoryId = (
@@ -190,7 +200,7 @@ describe.skipIf(!dbReady)('auctions (needs Postgres with migrations applied)', (
     await bid(buyerA, auctionId, 40);
     await bid(buyerB, auctionId, 80);
 
-    await closeAuction(auctionId);
+    await closeNow(auctionId);
 
     const state = await auctionState(auctionId);
     expect(state.status).toBe('ENDED');
@@ -223,10 +233,42 @@ describe.skipIf(!dbReady)('auctions (needs Postgres with migrations applied)', (
     ).toBeGreaterThanOrEqual(1);
   });
 
+  it('AUC-05: a close call before endAt leaves the auction live', async () => {
+    const { listingId, auctionId } = await newAuctionListing(2, 10, 50);
+    await bid(buyerA, auctionId, 50);
+
+    const result = await closeAuction(auctionId);
+
+    expect(result.endedAt).toBe(false);
+    expect(result.dueAt).toBeInstanceOf(Date);
+    expect(await auctionState(auctionId)).toMatchObject({ status: 'ACTIVE', winningBidId: null });
+    expect(await prisma.order.count({ where: { auctionId } })).toBe(0);
+    expect(await listingStatus(listingId)).toBe('ACTIVE');
+    expect((await bid(buyerB, auctionId, 60)).status).toBe(200);
+  });
+
+  it('AUC-05: a close job that fires early is delayed to endAt, not completed', async () => {
+    const { auctionId } = await newAuctionListing(2, 10, 50);
+    const { endAt } = await prisma.auction.findUniqueOrThrow({ where: { id: auctionId } });
+    const moveToDelayed = vi.fn().mockResolvedValue(undefined);
+    const job = { data: { auctionId }, moveToDelayed } as unknown as Job<{ auctionId: string }>;
+
+    await expect(processAuctionCloseJob(job, 'token')).rejects.toBeInstanceOf(DelayedError);
+    expect(moveToDelayed).toHaveBeenCalledWith(endAt.getTime(), 'token');
+    expect((await auctionState(auctionId)).status).toBe('ACTIVE');
+
+    moveToDelayed.mockClear();
+    await endNow(auctionId);
+    await processAuctionCloseJob(job, 'token');
+    expect(moveToDelayed).not.toHaveBeenCalled();
+    expect((await auctionState(auctionId)).status).toBe('ENDED');
+  });
+
   it('AUC-05: closing the same auction twice at once creates exactly one order (idempotent under the row lock)', async () => {
     const { auctionId } = await newAuctionListing(2, 10, 50);
     await bid(buyerA, auctionId, 50);
 
+    await endNow(auctionId);
     const results = await Promise.allSettled([closeAuction(auctionId), closeAuction(auctionId)]);
     expect(results.every((r) => r.status === 'fulfilled')).toBe(true);
     expect(await prisma.order.count({ where: { auctionId } })).toBe(1);
@@ -259,7 +301,7 @@ describe.skipIf(!dbReady)('auctions (needs Postgres with migrations applied)', (
     await bid(buyerA, auctionId, 100);
     await prisma.listing.update({ where: { id: listingId }, data: { status: 'DELISTED' } });
 
-    await closeAuction(auctionId);
+    await closeNow(auctionId);
 
     expect((await auctionState(auctionId)).status).toBe('ENDED');
     expect(await prisma.order.count({ where: { auctionId } })).toBe(0);
@@ -310,7 +352,7 @@ describe.skipIf(!dbReady)('auctions (needs Postgres with migrations applied)', (
       data: { auctionId, buyerId: buyerA.id, amount: 80, createdAt: new Date(now - 10_000) },
     });
     await prisma.auction.update({ where: { id: auctionId }, data: { currentBid: 80 } });
-    await closeAuction(auctionId);
+    await closeNow(auctionId);
 
     const order = await prisma.order.findFirstOrThrow({ where: { auctionId } });
     expect(order.buyerId).toBe(buyerA.id);
@@ -367,7 +409,7 @@ describe.skipIf(!dbReady)('auctions (needs Postgres with migrations applied)', (
     // 100.00 / 3 = 33.33 per unit, and 3 * 33.33 = 99.99: the total must stay 100.00.
     const { auctionId } = await newAuctionListing(3, 5, 100);
     expect((await bid(buyerA, auctionId, 100)).status).toBe(200);
-    await closeAuction(auctionId);
+    await closeNow(auctionId);
 
     const order = await prisma.order.findFirstOrThrow({ where: { auctionId } });
     expect(order.agreedPrice.toString()).toBe('33.33');
@@ -380,7 +422,7 @@ describe.skipIf(!dbReady)('auctions (needs Postgres with migrations applied)', (
   it('ORD-01: a rounding-up split does not overcharge: 1000.00 for 7 units totals 1000.00', async () => {
     const { auctionId } = await newAuctionListing(7, 5, 1000);
     expect((await bid(buyerA, auctionId, 1000)).status).toBe(200);
-    await closeAuction(auctionId);
+    await closeNow(auctionId);
 
     const order = await prisma.order.findFirstOrThrow({ where: { auctionId } });
     expect(order.agreedPrice.toString()).toBe('142.86');
@@ -391,7 +433,7 @@ describe.skipIf(!dbReady)('auctions (needs Postgres with migrations applied)', (
     const { listingId, auctionId } = await newAuctionListing(3, 5, 100);
     await bid(buyerA, auctionId, 100);
     await bid(buyerB, auctionId, 120);
-    await closeAuction(auctionId);
+    await closeNow(auctionId);
     const order = await prisma.order.findFirstOrThrow({ where: { auctionId } });
 
     const res = await request(app)
@@ -411,7 +453,7 @@ describe.skipIf(!dbReady)('auctions (needs Postgres with migrations applied)', (
     // The old auction cannot be resumed: no bids, and neither the close job nor the sweep
     // can produce a second order from its old bids.
     expect((await bid(buyerA, auctionId, 200)).status).toBe(409);
-    await closeAuction(auctionId);
+    await closeNow(auctionId);
     await sweepOverdueAuctions();
     expect(await prisma.order.count({ where: { auctionId } })).toBe(1);
     expect((await auctionState(auctionId)).status).toBe('CANCELLED');
@@ -419,7 +461,7 @@ describe.skipIf(!dbReady)('auctions (needs Postgres with migrations applied)', (
 
   it('AUC-05: closing an auction with no bids ends it without creating an order', async () => {
     const { auctionId } = await newAuctionListing(1, 5, 30);
-    await closeAuction(auctionId);
+    await closeNow(auctionId);
     expect((await auctionState(auctionId)).status).toBe('ENDED');
     expect(await prisma.order.count({ where: { auctionId } })).toBe(0);
     expect(
@@ -447,7 +489,7 @@ describe.skipIf(!dbReady)('auctions (needs Postgres with migrations applied)', (
   const cancelledAuctionListing = async () => {
     const { listingId, auctionId } = await newAuctionListing(3, 5, 100);
     await bid(buyerA, auctionId, 100);
-    await closeAuction(auctionId);
+    await closeNow(auctionId);
     const order = await prisma.order.findFirstOrThrow({ where: { auctionId } });
     await request(app)
       .patch(`/api/orders/${order.id}/status`)
@@ -492,7 +534,7 @@ describe.skipIf(!dbReady)('auctions (needs Postgres with migrations applied)', (
 
     expect((await bid(buyerB, oldAuctionId, 500)).status).toBe(409);
     expect((await bid(buyerB, newAuctionId, 100)).status).toBe(200);
-    await closeAuction(newAuctionId);
+    await closeNow(newAuctionId);
 
     const newOrder = await prisma.order.findFirstOrThrow({ where: { auctionId: newAuctionId } });
     expect(newOrder).toMatchObject({ buyerId: buyerB.id, quantity: 3, status: 'PENDING' });
@@ -508,7 +550,7 @@ describe.skipIf(!dbReady)('auctions (needs Postgres with migrations applied)', (
 
   it('STK-02: an auction that ended with no bids can be relisted, keeping the price when none is given', async () => {
     const { listingId, auctionId } = await newAuctionListing(2, 5, 70);
-    await closeAuction(auctionId);
+    await closeNow(auctionId);
     expect((await auctionState(auctionId)).status).toBe('ENDED');
 
     const res = await relist(listingId, { minIncrement: 5, endAt: inADay() });
@@ -542,7 +584,7 @@ describe.skipIf(!dbReady)('auctions (needs Postgres with migrations applied)', (
     // Sold: the order is still PENDING, so the lot is not back in stock.
     const sold = await newAuctionListing(1, 5, 100);
     await bid(buyerA, sold.auctionId, 100);
-    await closeAuction(sold.auctionId);
+    await closeNow(sold.auctionId);
     expect((await relist(sold.listingId, body)).status).toBe(409);
 
     // Delisting ends the auction with no winner, but the listing is no longer ACTIVE.
