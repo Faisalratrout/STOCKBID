@@ -181,6 +181,70 @@ describe.skipIf(!dbReady)('auctions (needs Postgres with migrations applied)', (
     expect(res.body.data[0].amountPerUnit).toBe('12.5');
   });
 
+  const bidHistory = (s: Session, auctionId: string, query = '') =>
+    request(app).get(`/api/auctions/${auctionId}/bids${query}`).set(s.auth);
+
+  type BidRow = { amount: string; isMine: boolean; bidder: Record<string, unknown> };
+
+  it('AUC-03: buyers see bidders only as "Bidder N" by first bid, with their own bids marked', async () => {
+    const { auctionId } = await newAuctionListing(2, 10, 40);
+    await bid(buyerA, auctionId, 40);
+    await bid(buyerB, auctionId, 50);
+    await bid(buyerA, auctionId, 60);
+
+    const res = await bidHistory(buyerB, auctionId);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.map((b: BidRow) => [b.amount, b.bidder, b.isMine])).toEqual([
+      ['60', { label: 'Bidder 1' }, false],
+      ['50', { label: 'Bidder 2' }, true],
+      ['40', { label: 'Bidder 1' }, false],
+    ]);
+    const body = JSON.stringify(res.body);
+    for (const leak of [buyerA.id, buyerB.id, 'buyerA Co', 'buyerB Co', 'buyerId']) {
+      expect(body).not.toContain(leak);
+    }
+  });
+
+  it('AUC-03: bidder labels are stable across pages, requests and later bids', async () => {
+    const { auctionId } = await newAuctionListing(2, 10, 40);
+    await bid(buyerA, auctionId, 40);
+    await bid(buyerB, auctionId, 50);
+
+    const oldest = async () =>
+      ((await bidHistory(buyerA, auctionId, '?page=2&pageSize=1')).body.data as BidRow[])[0];
+    expect((await oldest())?.bidder.label).toBe('Bidder 1');
+
+    await bid(buyerB, auctionId, 60);
+    await bid(buyerA, auctionId, 70);
+    const all = (await bidHistory(buyerA, auctionId)).body.data as BidRow[];
+    expect(all.map((b) => b.bidder.label)).toEqual([
+      'Bidder 1',
+      'Bidder 2',
+      'Bidder 2',
+      'Bidder 1',
+    ]);
+    expect(
+      (await bidHistory(buyerA, auctionId, '?page=4&pageSize=1')).body.data[0].bidder.label,
+    ).toBe('Bidder 1');
+  });
+
+  it("AUC-03: the auction's own seller sees each bidder's company next to the label; other sellers do not", async () => {
+    const { auctionId } = await newAuctionListing(2, 10, 40);
+    await bid(buyerA, auctionId, 40);
+    await bid(buyerB, auctionId, 50);
+
+    const own = (await bidHistory(seller, auctionId)).body.data as BidRow[];
+    expect(own.map((b) => b.bidder)).toEqual([
+      { label: 'Bidder 2', companyName: 'buyerB Co', logoUrl: null },
+      { label: 'Bidder 1', companyName: 'buyerA Co', logoUrl: null },
+    ]);
+    expect(own.every((b) => b.isMine === false)).toBe(true);
+
+    const other = (await bidHistory(outsiderSeller, auctionId)).body.data as BidRow[];
+    expect(other.map((b) => b.bidder)).toEqual([{ label: 'Bidder 2' }, { label: 'Bidder 1' }]);
+  });
+
   it('AUC-02: two buyers bidding the same amount at the exact same time: exactly one wins', async () => {
     const { auctionId } = await newAuctionListing(2, 5, 100);
     const results = await Promise.all([bid(buyerA, auctionId, 100), bid(buyerB, auctionId, 100)]);

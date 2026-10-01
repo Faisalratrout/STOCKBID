@@ -2,16 +2,23 @@ import type { Prisma, Role } from '@prisma/client';
 import type { PageMeta } from '../utils/ApiResponse';
 import type { listingCardSelect, listingDetailSelect } from './listing.select';
 import type { offerSelect } from './offer.select';
-import type { auctionDetailSelect, bidSelect } from './auction.select';
+import type { auctionDetailSelect } from './auction.select';
 import type { orderSelect } from './order.select';
 
 export type OfferView = Prisma.OfferGetPayload<{ select: typeof offerSelect }>;
 
 // AUC-02: amounts are the total lot price. *PerUnit fields divide by the listing's
 // quantityTotal so sellers/admins can read either total or per-unit at a glance.
-export type BidView = Prisma.BidGetPayload<{ select: typeof bidSelect }> & {
+export interface BidView {
+  id: string;
+  auctionId: string;
+  amount: Prisma.Decimal;
   amountPerUnit: Prisma.Decimal;
-};
+  createdAt: Date;
+  isMine: boolean;
+  // AUC-03: bidders are anonymous; companyName/logoUrl are present only for the auction's seller.
+  bidder: { label: string; companyName?: string | null; logoUrl?: string | null };
+}
 export type AuctionView = Prisma.AuctionGetPayload<{ select: typeof auctionDetailSelect }> & {
   startingBidPerUnit: Prisma.Decimal;
   currentBidPerUnit: Prisma.Decimal | null;

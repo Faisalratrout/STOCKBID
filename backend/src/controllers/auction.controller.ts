@@ -10,7 +10,11 @@ export const detail = asyncHandler(async (req, res) => {
 });
 
 export const bids = asyncHandler(async (req, res) => {
-  const { items, meta } = await auctionService.listBids(auctionId(req.params), res.locals.query);
+  const { items, meta } = await auctionService.listBids(
+    auctionId(req.params),
+    res.locals.query,
+    requireUser(req),
+  );
   ok(res, items, meta);
 });
 

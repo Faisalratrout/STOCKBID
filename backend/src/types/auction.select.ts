@@ -6,9 +6,7 @@ export const bidSelect = {
   buyerId: true,
   amount: true,
   createdAt: true,
-  buyer: {
-    select: { id: true, businessProfile: { select: { companyName: true, logoUrl: true } } },
-  },
+  buyer: { select: { businessProfile: { select: { companyName: true, logoUrl: true } } } },
 } satisfies Prisma.BidSelect;
 
 export const auctionDetailSelect = {

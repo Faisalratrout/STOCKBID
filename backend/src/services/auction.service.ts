@@ -51,31 +51,60 @@ export const onAuctionCreated = (auctionId: string, endAt: Date) =>
 
 export const getAuction = (id: string) => view(id);
 
-/** AUC-03 */
+/**
+ * AUC-03: bidders appear as "Bidder N", numbered by first bid in this auction. Only the
+ * auction's seller also gets each bidder's company name and logo.
+ */
 export const listBids = async (
   auctionId: string,
   query: BidListQuery,
+  viewer: AuthUser,
 ): Promise<Paginated<BidView>> => {
-  const exists = await prisma.auction.findUnique({ where: { id: auctionId }, select: { id: true } });
-  if (!exists) throw ApiError.notFound('Auction not found');
+  const auction = await prisma.auction.findUnique({
+    where: { id: auctionId },
+    select: { listing: { select: { sellerId: true, quantityTotal: true } } },
+  });
+  if (!auction) throw ApiError.notFound('Auction not found');
 
   const where = { auctionId };
-  const [total, auctionQty, rows] = await prisma.$transaction([
-    prisma.bid.count({ where }),
-    prisma.auction.findUniqueOrThrow({
-      where: { id: auctionId },
-      select: { listing: { select: { quantityTotal: true } } },
-    }),
-    prisma.bid.findMany({
-      where,
-      select: bidSelect,
-      orderBy: { createdAt: 'desc' },
-      skip: (query.page - 1) * query.pageSize,
-      take: query.pageSize,
-    }),
-  ]);
-  const quantityTotal = auctionQty.listing.quantityTotal;
-  const items = rows.map((b) => ({ ...b, amountPerUnit: perUnit(b.amount, quantityTotal) }));
+  // One snapshot, so every bid on the page has a label.
+  const [total, rows, firstBids] = await prisma.$transaction(
+    [
+      prisma.bid.count({ where }),
+      prisma.bid.findMany({
+        where,
+        select: bidSelect,
+        orderBy: { createdAt: 'desc' },
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+      }),
+      // Amounts strictly increase under the auction lock, so each bidder's lowest bid orders
+      // them by arrival; createdAt can be skewed across instances.
+      prisma.bid.groupBy({
+        by: ['buyerId'],
+        where,
+        _min: { amount: true },
+        orderBy: { _min: { amount: 'asc' } },
+      }),
+    ],
+    { isolationLevel: 'RepeatableRead' },
+  );
+
+  const labels = new Map(firstBids.map((b, i) => [b.buyerId, `Bidder ${i + 1}`]));
+  const { sellerId, quantityTotal } = auction.listing;
+  const isSeller = viewer.id === sellerId;
+  const items = rows.map(({ buyerId, buyer, ...b }) => ({
+    ...b,
+    amountPerUnit: perUnit(b.amount, quantityTotal),
+    isMine: buyerId === viewer.id,
+    bidder: {
+      label: labels.get(buyerId) ?? 'Bidder',
+      ...(isSeller && {
+        companyName: buyer.businessProfile?.companyName ?? null,
+        logoUrl: buyer.businessProfile?.logoUrl ?? null,
+      }),
+    },
+  }));
   return { items, meta: pageMeta(query.page, query.pageSize, total) };
 };
 
