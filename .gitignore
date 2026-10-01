@@ -1,6 +1,7 @@
 # Local rules / tooling (never commit)
 CLAUDE.md
 LAYER2.md
+PROJECT_STATUS.md
 graphify-out/
 .claude/
 
