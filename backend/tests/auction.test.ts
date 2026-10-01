@@ -4,6 +4,7 @@ import { createApp } from '../src/app';
 import { prisma } from '../src/config/db';
 import { auctionCloseQueue } from '../src/jobs/auctionClose.job';
 import { closeAuction, sweepOverdueAuctions } from '../src/services/auction.service';
+import { lockAuction } from '../src/utils/locks';
 import { placeBidSchema } from '../src/validators/auction.validators';
 import { isDbReady } from './helpers/db';
 import { markEmailVerified } from './helpers/users';
@@ -631,5 +632,125 @@ describe.skipIf(!dbReady)('auctions (needs Postgres with migrations applied)', (
     expect(await listingStatus(listingId)).toBe('DELISTED');
     expect((await auctionState(auctionId)).status).toBe('CANCELLED');
     expect((await relist(listingId, { minIncrement: 5, endAt: inADay() })).status).toBe(409);
+  });
+
+  const listingPointer = (id: string) =>
+    prisma.listing.findUniqueOrThrow({ where: { id }, select: { status: true, auctionId: true } });
+
+  // Every outcome must match a serial order. Both succeed only when relist commits before
+  // delist reads the pointer; delist then ends the new auction.
+  const expectDelistRelistOutcome = async (
+    listingId: string,
+    oldAuctionId: string,
+    d: request.Response,
+    r: request.Response,
+  ) => {
+    expect([204, 409]).toContain(d.status);
+    expect([201, 409]).toContain(r.status);
+    const listing = await listingPointer(listingId);
+    const auctions = await prisma.auction.count({ where: { listingId } });
+    expect((await auctionState(oldAuctionId)).status).toBe('CANCELLED');
+
+    if (r.status === 409) {
+      expect(d.status).toBe(204);
+      expect(listing).toEqual({ status: 'DELISTED', auctionId: oldAuctionId });
+      expect(auctions).toBe(1);
+      return;
+    }
+    const newAuctionId = r.body.data.auction.id as string;
+    expect(auctions).toBe(2);
+    expect(listing.auctionId).toBe(newAuctionId);
+    expect(listing.status).toBe(d.status === 204 ? 'DELISTED' : 'ACTIVE');
+    expect((await auctionState(newAuctionId)).status).toBe(d.status === 204 ? 'ENDED' : 'ACTIVE');
+  };
+
+  it('STK-02/STK-04: a delist racing a relist on a cancelled auction never double-applies or errors', async () => {
+    for (let i = 0; i < 5; i++) {
+      const { listingId, auctionId } = await cancelledAuctionListing();
+      const [d, r] = await Promise.all([
+        delist(listingId),
+        relist(listingId, { minIncrement: 5, endAt: inADay() }),
+      ]);
+      await expectDelistRelistOutcome(listingId, auctionId, d, r);
+    }
+  });
+
+  // Left to timing, delist always takes the lock first, so the pointer match in delist is never
+  // exercised. Holding the old auction's lock while both requests queue fixes the order:
+  // Postgres grants a row lock to waiters in arrival order, and both have read the old pointer.
+  const lockWaiters = async (holderPid: number) => {
+    const rows = await prisma.$queryRaw<{ n: number }[]>`
+      WITH RECURSIVE w(pid) AS (
+        SELECT pid FROM pg_stat_activity WHERE ${holderPid}::int = ANY(pg_blocking_pids(pid))
+        UNION
+        SELECT a.pid FROM pg_stat_activity a JOIN w ON w.pid = ANY(pg_blocking_pids(a.pid))
+      )
+      SELECT count(*)::int AS n FROM w`;
+    return rows[0]!.n;
+  };
+
+  const raceInOrder = async (
+    auctionId: string,
+    first: () => request.Test,
+    second: () => request.Test,
+  ) => {
+    let holderPid = 0;
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let onLocked!: () => void;
+    const locked = new Promise<void>((resolve) => (onLocked = resolve));
+    const holder = prisma.$transaction(
+      async (tx) => {
+        await lockAuction(tx, auctionId);
+        const rows = await tx.$queryRaw<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
+        holderPid = rows[0]!.pid;
+        onLocked();
+        await released;
+      },
+      { timeout: 15_000 },
+    );
+    await Promise.race([locked, holder]);
+
+    const waitForWaiters = async (n: number) => {
+      for (let i = 0; i < 200 && (await lockWaiters(holderPid)) < n; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(await lockWaiters(holderPid)).toBe(n);
+    };
+    try {
+      const a = first().then((res) => res);
+      await waitForWaiters(1);
+      const b = second().then((res) => res);
+      await waitForWaiters(2);
+      release();
+      return await Promise.all([a, b]);
+    } finally {
+      release();
+      await holder;
+    }
+  };
+
+  it('STK-02/STK-04: relist taking the lock first makes the waiting delist a 409, not a delist of the wrong auction', async () => {
+    const { listingId, auctionId } = await cancelledAuctionListing();
+    const [r, d] = await raceInOrder(
+      auctionId,
+      () => relist(listingId, { minIncrement: 5, endAt: inADay() }),
+      () => delist(listingId),
+    );
+    expect(r.status).toBe(201);
+    expect(d.status).toBe(409);
+    await expectDelistRelistOutcome(listingId, auctionId, d, r);
+  });
+
+  it('STK-02/STK-04: delist taking the lock first makes the waiting relist a 409', async () => {
+    const { listingId, auctionId } = await cancelledAuctionListing();
+    const [d, r] = await raceInOrder(
+      auctionId,
+      () => delist(listingId),
+      () => relist(listingId, { minIncrement: 5, endAt: inADay() }),
+    );
+    expect(d.status).toBe(204);
+    expect(r.status).toBe(409);
+    await expectDelistRelistOutcome(listingId, auctionId, d, r);
   });
 });
