@@ -622,4 +622,14 @@ describe.skipIf(!dbReady)('auctions (needs Postgres with migrations applied)', (
     expect((await auctionState(newAuctionId)).status).toBe('ENDED');
     expect((await bid(buyerA, newAuctionId, 100)).status).toBe(409);
   });
+
+  it('STK-04: a listing whose auction order was cancelled can be delisted despite the old bids', async () => {
+    const { listingId, auctionId } = await cancelledAuctionListing();
+    expect(await prisma.bid.count({ where: { auctionId } })).toBe(1);
+
+    expect((await delist(listingId)).status).toBe(204);
+    expect(await listingStatus(listingId)).toBe('DELISTED');
+    expect((await auctionState(auctionId)).status).toBe('CANCELLED');
+    expect((await relist(listingId, { minIncrement: 5, endAt: inADay() })).status).toBe(409);
+  });
 });

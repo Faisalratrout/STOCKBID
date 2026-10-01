@@ -235,7 +235,8 @@ export const updateListing = async (
 };
 
 /**
- * STK-04: soft delete. An auction that already has bids cannot be pulled. For auction listings
+ * STK-04: soft delete. A live auction that already has bids cannot be pulled; one that is unsold
+ * and closed for good (cancelled order, or ended with no winner) can, bids or not. For auction listings
  * this takes the same auction lock as placeBid, so a bid cannot commit between the "no bids"
  * check and the delist, and it ends the auction so it can never take bids or produce an order.
  */
@@ -256,7 +257,13 @@ export const delistListing = async (id: string, sellerId: string): Promise<void>
         // A relist between the read above and the lock would repoint the listing at an auction
         // we don't hold the lock on; matching the locked id makes that a 409 instead.
         auctionId,
-        OR: [{ auction: { is: null } }, { auction: { is: { bids: { none: {} } } } }],
+        // No bids yet, or unsold and closed for good (see isUnsold): neither can sell anything.
+        OR: [
+          { auction: { is: null } },
+          { auction: { is: { bids: { none: {} } } } },
+          { auction: { is: { status: 'CANCELLED' } } },
+          { auction: { is: { status: 'ENDED', winningBidId: null } } },
+        ],
       },
       data: { status: 'DELISTED' },
     });
