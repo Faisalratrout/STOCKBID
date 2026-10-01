@@ -51,6 +51,18 @@ export const onAuctionCreated = (auctionId: string, endAt: Date) =>
 
 export const getAuction = (id: string) => view(id);
 
+/** AUC-04: only the auction's seller and buyers who have bid on it may join its socket room. */
+export const canWatchAuction = async (userId: string, auctionId: string): Promise<boolean> => {
+  const auction = await prisma.auction.findFirst({
+    where: {
+      id: auctionId,
+      OR: [{ listing: { sellerId: userId } }, { bids: { some: { buyerId: userId } } }],
+    },
+    select: { id: true },
+  });
+  return auction !== null;
+};
+
 /**
  * AUC-03: bidders appear as "Bidder N", numbered by first bid in this auction. Only the
  * auction's seller also gets each bidder's company name and logo.
@@ -278,7 +290,10 @@ export const closeAuction = async (auctionId: string): Promise<CloseResult> => {
     return { alreadyClosed: false as const, winner: winningBid.buyerId };
   });
 
-  if (!outcome.alreadyClosed) emitAuctionEnded(auctionId, { auctionId, winner: outcome.winner });
+  // AUC-04: the room is shared, so it is never told who won; the winner is notified directly.
+  if (!outcome.alreadyClosed) {
+    emitAuctionEnded(auctionId, { auctionId, sold: outcome.winner !== null });
+  }
   return {
     auctionId,
     endedAt: !outcome.alreadyClosed,

@@ -3,8 +3,11 @@ import request from 'supertest';
 import { createApp } from '../src/app';
 import { prisma } from '../src/config/db';
 import { DelayedError, type Job } from 'bullmq';
+import type { Server, Socket } from 'socket.io';
 import { auctionCloseQueue, processAuctionCloseJob } from '../src/jobs/auctionClose.job';
 import { closeAuction, sweepOverdueAuctions } from '../src/services/auction.service';
+import { initEmitter } from '../src/sockets/emitter';
+import { registerSocketHandlers } from '../src/sockets/index';
 import { lockAuction } from '../src/utils/locks';
 import { placeBidSchema } from '../src/validators/auction.validators';
 import { isDbReady } from './helpers/db';
@@ -521,6 +524,68 @@ describe.skipIf(!dbReady)('auctions (needs Postgres with migrations applied)', (
     await sweepOverdueAuctions();
     expect(await prisma.order.count({ where: { auctionId } })).toBe(1);
     expect((await auctionState(auctionId)).status).toBe('CANCELLED');
+  });
+
+  // Drives the real connection handler with a stub socket; resolves with the ack and the rooms joined.
+  const watch = (s: Session, auctionId: string) => {
+    const handlers: Record<string, (...args: unknown[]) => unknown> = {};
+    const rooms: string[] = [];
+    const socket = {
+      data: { user: { id: s.id } },
+      join: (room: string) => void rooms.push(room),
+      leave: () => undefined,
+      on: (event: string, fn: (...args: unknown[]) => unknown) => (handlers[event] = fn),
+    } as unknown as Socket;
+    registerSocketHandlers(socket);
+    return new Promise<{ ok: boolean; rooms: string[] }>((resolve) => {
+      void handlers['auction:watch']!(auctionId, ({ ok }: { ok: boolean }) =>
+        resolve({ ok, rooms }),
+      );
+    });
+  };
+
+  it('AUC-04: only the seller and buyers who bid can join an auction room', async () => {
+    const { auctionId } = await newAuctionListing(2, 10, 40);
+    await bid(buyerA, auctionId, 40);
+    const room = `auction:${auctionId}`;
+
+    for (const s of [seller, buyerA]) {
+      const res = await watch(s, auctionId);
+      expect(res.ok).toBe(true);
+      expect(res.rooms).toContain(room);
+    }
+    for (const s of [buyerB, outsiderSeller]) {
+      const res = await watch(s, auctionId);
+      expect(res.ok).toBe(false);
+      expect(res.rooms).not.toContain(room);
+    }
+    expect((await watch(buyerA, 'not-an-auction')).ok).toBe(false);
+  });
+
+  it('AUC-04: auction room broadcasts never carry a bidder id, including the winner', async () => {
+    const sent: { room: string; event: string; payload: unknown }[] = [];
+    initEmitter({
+      to: (room: string) => ({
+        emit: (event: string, payload: unknown) => sent.push({ room, event, payload }),
+      }),
+    } as unknown as Server);
+    try {
+      const { auctionId } = await newAuctionListing(2, 10, 40);
+      await bid(buyerA, auctionId, 40);
+      await bid(buyerB, auctionId, 50);
+      await closeNow(auctionId);
+
+      const roomSent = sent.filter((m) => m.room === `auction:${auctionId}`);
+      expect(roomSent.find((m) => m.event === 'auction:ended')?.payload).toEqual({
+        auctionId,
+        sold: true,
+      });
+      const broadcast = JSON.stringify(roomSent);
+      expect(broadcast).not.toContain(buyerA.id);
+      expect(broadcast).not.toContain(buyerB.id);
+    } finally {
+      initEmitter(undefined as unknown as Server);
+    }
   });
 
   it('AUC-05: closing an auction with no bids ends it without creating an order', async () => {
