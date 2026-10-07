@@ -1,7 +1,7 @@
 export type Condition = 'NEW' | 'USED';
 export type SellingMethod = 'OFFER' | 'AUCTION';
 export type ListingStatus = 'ACTIVE' | 'SOLD' | 'EXPIRED' | 'DELISTED';
-export type AuctionStatus = 'SCHEDULED' | 'LIVE' | 'ENDED' | 'CANCELLED';
+export type AuctionStatus = 'SCHEDULED' | 'ACTIVE' | 'ENDED' | 'CANCELLED';
 
 export interface Category {
   id: string;
@@ -65,6 +65,43 @@ export interface ListingDetail {
       isVerified: boolean;
     } | null;
   };
+}
+
+// Mirrors backend/src/types/auction.select.ts:auctionDetailSelect + the *PerUnit fields
+// backend/src/services/auction.service.ts computes server-side (backend/src/types/dto.ts:AuctionView)
+export interface AuctionView {
+  id: string;
+  listingId: string;
+  startingBid: string;
+  minIncrement: string;
+  currentBid: string | null;
+  startAt: string;
+  endAt: string;
+  status: AuctionStatus;
+  winningBidId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  startingBidPerUnit: string;
+  currentBidPerUnit: string | null;
+  listing: {
+    id: string;
+    title: string;
+    sellerId: string;
+    status: ListingStatus;
+    quantityTotal: number;
+    images: { url: string }[];
+  };
+}
+
+// Mirrors backend/src/types/dto.ts:BidView
+export interface BidView {
+  id: string;
+  auctionId: string;
+  amount: string;
+  amountPerUnit: string;
+  createdAt: string;
+  isMine: boolean;
+  bidder: { label: string; companyName?: string | null; logoUrl?: string | null };
 }
 
 export type BrowseSort = 'newest' | 'price_asc' | 'price_desc' | 'ending_soon';

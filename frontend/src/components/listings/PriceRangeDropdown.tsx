@@ -42,7 +42,7 @@ export const PriceRangeDropdown = ({
       >
         {label}
         {/* Sized to match the native <select> arrow next to it: measured at ~8.75x5.5 CSS px. */}
-        <svg viewBox="0 0 16 10" fill="none" stroke="currentColor" strokeWidth="2" className="h-[6px] w-[8.75px] shrink-0 text-neutral-900">
+        <svg viewBox="0 0 16 10" fill="none" stroke="currentColor" strokeWidth="2" className="h-1.5 w-[8.75px] shrink-0 text-neutral-900">
           <path d="M1 1 8 9.5 15 1" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </button>
