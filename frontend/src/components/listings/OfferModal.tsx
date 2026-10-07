@@ -129,7 +129,7 @@ export const OfferModal = ({ listing, onClose }: OfferModalProps) => {
 
             {quantityNum > 0 && priceNum > 0 && (
               <p className="text-sm text-neutral-600">
-                You are offering ${priceNum.toFixed(2)} per unit — ${total.toFixed(2)} total for {quantityNum} units.
+                You are offering ${priceNum.toFixed(2)} per unit (${total.toFixed(2)} total for {quantityNum} units).
               </p>
             )}
 

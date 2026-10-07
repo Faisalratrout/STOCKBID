@@ -26,7 +26,7 @@ const formatRelativeTime = (iso: string) => {
 
 const pad = (n: number) => String(n).padStart(2, '0');
 
-// Ticks a plain setInterval countdown to endAt — same idea as a FSO timer exercise, just
+// Ticks a plain setInterval countdown to endAt, same idea as a FSO timer exercise, just
 // deriving hours/minutes/seconds from a target Date instead of counting up from zero.
 const useCountdown = (endAt: string | undefined) => {
   const [remainingMs, setRemainingMs] = useState(0);
@@ -59,7 +59,7 @@ const AuctionPage = () => {
   const [formError, setFormError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Polling instead of the socket events the backend emits (emitNewBid/emitOutbid) — real-time
+  // Polling instead of the socket events the backend emits (emitNewBid/emitOutbid). Real-time
   // push via Socket.IO is a new concept with no FSO equivalent, so it's deferred rather than
   // built silently. This keeps the bid box and history reasonably fresh in the meantime.
   const {

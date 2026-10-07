@@ -24,7 +24,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   // Subscribes to auth-storage directly: SSR and first client paint both use
   // getServerSnapshot (logged-out), then React re-renders with the real session right
-  // after hydration — no manual effect/setState dance needed for that swap.
+  // after hydration, no manual effect/setState dance needed for that swap.
   const session = useSyncExternalStore(subscribe, getSession, getServerSnapshot);
 
   const applySession = useCallback((next: StoredSession) => {

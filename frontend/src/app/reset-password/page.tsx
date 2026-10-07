@@ -2,7 +2,7 @@ import { Suspense } from 'react';
 import { ResetPasswordForm } from './ResetPasswordForm';
 
 // useSearchParams (reading ?token=...) requires a Suspense boundary, or the
-// production build fails — see frontend/AGENTS.md on checking Next's own docs
+// production build fails. See frontend/AGENTS.md on checking Next's own docs
 // before assuming an App Router API's behavior.
 const ResetPasswordPage = () => (
   <div className="flex min-h-[calc(100vh-57px)]">

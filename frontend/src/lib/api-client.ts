@@ -15,7 +15,7 @@ export interface PageMeta {
   totalPages: number;
 }
 
-// Mirrors backend/src/middlewares/error.middleware.ts and utils/ApiResponse.ts exactly —
+// Mirrors backend/src/middlewares/error.middleware.ts and utils/ApiResponse.ts exactly:
 // every response is either { success: true, data } or { success: false, error }, with an
 // optional meta alongside data on paginated endpoints.
 type ApiEnvelope<T> =
@@ -100,7 +100,7 @@ const refreshAccessToken = async (): Promise<string | null> => {
 
 /**
  * Calls the STOCKBID API, attaching the stored access token by default. On a 401 from an
- * authenticated call, transparently refreshes once and retries before giving up — the caller
+ * authenticated call, transparently refreshes once and retries before giving up. The caller
  * never sees the expired-token round trip, only the eventual success or final failure.
  */
 const fetchEnvelope = async <T>(

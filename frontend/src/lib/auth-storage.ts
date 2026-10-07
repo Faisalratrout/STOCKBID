@@ -8,8 +8,8 @@ export interface StoredSession {
 
 const STORAGE_KEY = 'stockbid.session';
 
-// Next.js renders this module on the server too, where `window` doesn't exist —
-// every read/write must no-op there instead of throwing.
+// Next.js renders this module on the server too, where `window` doesn't exist,
+// so every read/write must no-op there instead of throwing.
 const isBrowser = () => typeof window !== 'undefined';
 
 const readFromStorage = (): StoredSession | null => {
@@ -23,7 +23,7 @@ const readFromStorage = (): StoredSession | null => {
   }
 };
 
-// Cached so getSnapshot() returns a stable reference across calls — useSyncExternalStore
+// Cached so getSnapshot() returns a stable reference across calls: useSyncExternalStore
 // re-renders whenever the snapshot reference changes, so re-parsing localStorage on every
 // call would re-render in an infinite loop even when nothing actually changed.
 let cached: StoredSession | null = readFromStorage();
