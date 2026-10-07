@@ -26,6 +26,47 @@ export interface ListingCard {
   auction: { currentBid: string | null; endAt: string; status: AuctionStatus } | null;
 }
 
+export type HandoverMethod = 'PICKUP' | 'SELLER_DELIVERY' | 'BUYER_PICKUP';
+
+// Mirrors backend/src/types/listing.select.ts:listingDetailSelect
+export interface ListingDetail {
+  id: string;
+  sellerId: string;
+  title: string;
+  description: string;
+  condition: Condition;
+  quantityTotal: number;
+  quantityAvailable: number;
+  location: string;
+  sellingMethod: SellingMethod;
+  startingPrice: string;
+  handoverMethod: HandoverMethod;
+  status: ListingStatus;
+  expiresAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  category: Category;
+  images: { id: string; url: string; position: number }[];
+  auction: {
+    id: string;
+    startingBid: string;
+    minIncrement: string;
+    currentBid: string | null;
+    startAt: string;
+    endAt: string;
+    status: AuctionStatus;
+  } | null;
+  seller: {
+    id: string;
+    businessProfile: {
+      companyName: string;
+      logoUrl: string | null;
+      location: string;
+      isVerified: boolean;
+    } | null;
+  };
+}
+
 export type BrowseSort = 'newest' | 'price_asc' | 'price_desc' | 'ending_soon';
 
 export interface BrowseFilters {
