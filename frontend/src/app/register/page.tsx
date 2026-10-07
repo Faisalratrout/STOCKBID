@@ -41,7 +41,7 @@ const RegisterPage = () => {
         auth: false,
       });
       applySession(data);
-      router.push('/');
+      router.push('/browse');
     } catch (err) {
       if (err instanceof ApiClientError && err.code === 'VALIDATION_ERROR') {
         const details = err.details as { path: string; message: string }[] | undefined;

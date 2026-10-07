@@ -8,9 +8,19 @@ export interface ApiErrorBody {
   details?: unknown;
 }
 
+export interface PageMeta {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}
+
 // Mirrors backend/src/middlewares/error.middleware.ts and utils/ApiResponse.ts exactly —
-// every response is either { success: true, data } or { success: false, error }.
-type ApiEnvelope<T> = { success: true; data: T } | { success: false; error: ApiErrorBody };
+// every response is either { success: true, data } or { success: false, error }, with an
+// optional meta alongside data on paginated endpoints.
+type ApiEnvelope<T> =
+  | { success: true; data: T; meta?: PageMeta }
+  | { success: false; error: ApiErrorBody };
 
 export class ApiClientError extends Error {
   constructor(
@@ -36,7 +46,7 @@ const rawRequest = async <T>(
   path: string,
   options: RequestOptions,
   accessToken?: string,
-): Promise<T> => {
+): Promise<{ data: T; meta?: PageMeta }> => {
   const res = await fetch(`${API_URL}${path}`, {
     method: options.method ?? 'GET',
     headers: {
@@ -48,7 +58,7 @@ const rawRequest = async <T>(
   });
 
   // 204 No Content (e.g. logout) has no body to parse.
-  if (res.status === 204) return undefined as T;
+  if (res.status === 204) return { data: undefined as T };
 
   const json = (await res.json().catch(() => null)) as ApiEnvelope<T> | null;
   if (!json) {
@@ -57,7 +67,7 @@ const rawRequest = async <T>(
   if (!json.success) {
     throw new ApiClientError(res.status, json.error.code, json.error.message, json.error.details);
   }
-  return json.data;
+  return { data: json.data, meta: json.meta };
 };
 
 // Concurrent 401s during the same refresh share one in-flight request instead of each
@@ -73,7 +83,7 @@ const refreshAccessToken = async (): Promise<string | null> => {
       method: 'POST',
       body: { refreshToken: session.refreshToken },
     })
-      .then((tokens) => {
+      .then(({ data: tokens }) => {
         setSession({ ...session, ...tokens });
         return tokens.accessToken;
       })
@@ -93,7 +103,10 @@ const refreshAccessToken = async (): Promise<string | null> => {
  * authenticated call, transparently refreshes once and retries before giving up — the caller
  * never sees the expired-token round trip, only the eventual success or final failure.
  */
-export const apiFetch = async <T>(path: string, options: RequestOptions = {}): Promise<T> => {
+const fetchEnvelope = async <T>(
+  path: string,
+  options: RequestOptions = {},
+): Promise<{ data: T; meta?: PageMeta }> => {
   const wantsAuth = options.auth !== false;
   const session = wantsAuth ? getSession() : null;
 
@@ -108,4 +121,17 @@ export const apiFetch = async <T>(path: string, options: RequestOptions = {}): P
 
     return rawRequest<T>(path, options, newAccessToken);
   }
+};
+
+export const apiFetch = async <T>(path: string, options: RequestOptions = {}): Promise<T> =>
+  (await fetchEnvelope<T>(path, options)).data;
+
+/** Same as apiFetch, but also returns the pagination meta a list endpoint sends alongside data. */
+export const apiFetchPage = async <T>(
+  path: string,
+  options: RequestOptions = {},
+): Promise<{ data: T; meta: PageMeta }> => {
+  const { data, meta } = await fetchEnvelope<T>(path, options);
+  if (!meta) throw new Error(`Expected pagination meta from ${path}`);
+  return { data, meta };
 };

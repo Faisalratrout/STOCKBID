@@ -13,6 +13,10 @@ export const Header = () => {
         STOCKBID
       </Link>
 
+      <Link href="/browse" className="text-sm font-medium text-neutral-700 hover:text-black">
+        Browse Stock
+      </Link>
+
       <nav className="flex items-center gap-4">
         {user ? (
           <>
