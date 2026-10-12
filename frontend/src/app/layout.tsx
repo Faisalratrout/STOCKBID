@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import { AuthProvider } from "@/context/auth-context";
+import { ToastProvider } from "@/context/toast-context";
 import { QueryProvider } from "@/providers/query-provider";
 import { Header } from "@/components/layout/Header";
+import { OutbidListener } from "@/components/notifications/OutbidListener";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -15,8 +17,11 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <body>
         <QueryProvider>
           <AuthProvider>
-            <Header />
-            <main>{children}</main>
+            <ToastProvider>
+              <OutbidListener />
+              <Header />
+              <main>{children}</main>
+            </ToastProvider>
           </AuthProvider>
         </QueryProvider>
       </body>
