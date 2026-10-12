@@ -40,6 +40,15 @@ export const resetPassword = asyncHandler(async (req, res) => {
   ok(res, { message: 'Password updated. Please log in again.' });
 });
 
+export const changePassword = asyncHandler(async (req, res) => {
+  await authService.changePassword(
+    requireUser(req).id,
+    req.body.currentPassword,
+    req.body.newPassword,
+  );
+  ok(res, { message: 'Password updated. Please log in again on your other devices.' });
+});
+
 export const me = asyncHandler(async (req, res) => {
   ok(res, await authService.getMe(requireUser(req).id));
 });

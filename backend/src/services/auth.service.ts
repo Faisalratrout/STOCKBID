@@ -233,6 +233,27 @@ export const resetPassword = async (token: string, newPassword: string): Promise
   });
 };
 
+/** Signed-in password change: verifies the current password, then revokes all existing sessions. */
+export const changePassword = async (
+  userId: string,
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> => {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw ApiError.unauthorized();
+  const valid = await bcrypt.compare(currentPassword, user.passwordHash);
+  if (!valid) throw ApiError.badRequest('Current password is incorrect');
+  const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+
+  await prisma.$transaction(async (tx) => {
+    await tx.user.update({ where: { id: userId }, data: { passwordHash } });
+    await tx.refreshToken.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+  });
+};
+
 export const getMe = async (userId: string): Promise<PublicUser> => {
   const user = await prisma.user.findUnique({
     where: { id: userId },

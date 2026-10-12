@@ -4,6 +4,7 @@ import { authenticate } from '../middlewares/auth.middleware';
 import { authLimiter } from '../middlewares/rateLimiter.middleware';
 import { validate } from '../middlewares/validate.middleware';
 import {
+  changePasswordSchema,
   forgotPasswordSchema,
   loginSchema,
   refreshSchema,
@@ -36,5 +37,12 @@ authRoutes.post(
   authLimiter,
   validate({ body: resetPasswordSchema }),
   ctrl.resetPassword,
+);
+authRoutes.post(
+  '/change-password',
+  authLimiter,
+  authenticate,
+  validate({ body: changePasswordSchema }),
+  ctrl.changePassword,
 );
 authRoutes.get('/me', authenticate, ctrl.me);
