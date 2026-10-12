@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { apiFetch, apiFetchPage, ApiClientError } from '@/lib/api-client';
 import { useAuth } from '@/context/auth-context';
+import { useAuctionSocket } from '@/hooks/useAuctionSocket';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import type { AuctionView, BidView, ListingDetail } from '@/types/listing';
@@ -59,9 +60,6 @@ const AuctionPage = () => {
   const [formError, setFormError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Polling instead of the socket events the backend emits (emitNewBid/emitOutbid). Real-time
-  // push via Socket.IO is a new concept with no FSO equivalent, so it's deferred rather than
-  // built silently. This keeps the bid box and history reasonably fresh in the meantime.
   const {
     data: auction,
     isLoading,
@@ -70,19 +68,25 @@ const AuctionPage = () => {
   } = useQuery({
     queryKey: ['auction', id],
     queryFn: () => apiFetch<AuctionView>(`/auctions/${id}`),
-    refetchInterval: 5000,
   });
 
   const { data: bids, refetch: refetchBids } = useQuery({
     queryKey: ['auction-bids', id],
     queryFn: () => apiFetchPage<BidView[]>(`/auctions/${id}/bids`),
-    refetchInterval: 5000,
   });
 
   const { data: listing } = useQuery({
     queryKey: ['listing', auction?.listing.id],
     queryFn: () => apiFetch<ListingDetail>(`/listings/${auction?.listing.id}`, { auth: false }),
     enabled: Boolean(auction?.listing.id),
+  });
+
+  // Live updates via the backend's own Socket.IO room instead of polling: the server pushes
+  // `bid:new` to everyone watching this auction the instant any bid lands, including bids from
+  // other buyers in other tabs.
+  useAuctionSocket(id, () => {
+    refetchAuction();
+    refetchBids();
   });
 
   const { label: countdown } = useCountdown(auction?.endAt);
