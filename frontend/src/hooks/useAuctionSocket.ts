@@ -19,7 +19,13 @@ const SOCKET_URL = API_URL.replace(/\/api\/?$/, '');
  */
 export const useAuctionSocket = (auctionId: string | undefined, onUpdate: () => void) => {
   const onUpdateRef = useRef(onUpdate);
-  onUpdateRef.current = onUpdate;
+  // Keeping the ref current has to happen in an effect, not directly in the render body: render
+  // must stay a pure computation, and mutating a ref there is exactly the kind of side effect
+  // React warns against (it can run more than once per commit under StrictMode/concurrent
+  // rendering).
+  useEffect(() => {
+    onUpdateRef.current = onUpdate;
+  });
 
   useEffect(() => {
     const token = getSession()?.accessToken;

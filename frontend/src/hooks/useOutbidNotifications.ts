@@ -23,10 +23,11 @@ interface OutbidPayload {
 export const useOutbidNotifications = () => {
   const { user } = useAuth();
   const { showToast } = useToast();
+  const userId = user?.id;
 
   useEffect(() => {
     const token = getSession()?.accessToken;
-    if (!user || !token) return;
+    if (!userId || !token) return;
 
     const socket: Socket = io(SOCKET_URL, { auth: { token } });
     socket.on('bid:outbid', (payload: OutbidPayload) => {
@@ -36,5 +37,5 @@ export const useOutbidNotifications = () => {
     return () => {
       socket.disconnect();
     };
-  }, [user?.id, showToast]);
+  }, [userId, showToast]);
 };
