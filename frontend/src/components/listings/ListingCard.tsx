@@ -6,12 +6,17 @@ const CONDITION_LABELS: Record<ListingCardData['condition'], string> = {
   USED: 'Used',
 };
 
-const formatPrice = (value: string) =>
+const formatPrice = (value: number | string) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(value));
 
 export const ListingCard = ({ listing }: { listing: ListingCardData }) => {
   const isAuction = listing.sellingMethod === 'AUCTION';
-  const price = isAuction ? listing.auction?.currentBid ?? listing.startingPrice : listing.startingPrice;
+  // startingPrice is per-unit (confirmed with the backend dev); auction bid amounts are the lot
+  // total instead, a different field with different semantics. The card has no access to the
+  // auction's own startingBid (lot total), so an auction with no bids yet falls back to the
+  // per-unit price labeled honestly rather than implying a false total.
+  const unitPrice = Number(listing.startingPrice);
+  const totalForAvailable = unitPrice * listing.quantityAvailable;
 
   return (
     <Link
@@ -30,7 +35,21 @@ export const ListingCard = ({ listing }: { listing: ListingCardData }) => {
         <p className="text-xs text-neutral-500">
           {listing.quantityAvailable} units &bull; {CONDITION_LABELS[listing.condition]}
         </p>
-        <p className="text-sm font-semibold text-neutral-900">{formatPrice(price)}</p>
+        {isAuction ? (
+          <p className="text-sm font-semibold text-neutral-900">
+            {listing.auction?.currentBid ? formatPrice(listing.auction.currentBid) : formatPrice(unitPrice)}{' '}
+            <span className="text-xs font-normal text-neutral-500">
+              {listing.auction?.currentBid ? 'current bid' : 'per unit (starting)'}
+            </span>
+          </p>
+        ) : (
+          <div>
+            <p className="text-sm font-semibold text-neutral-900">
+              {formatPrice(unitPrice)} <span className="text-xs font-normal text-neutral-500">/ unit</span>
+            </p>
+            <p className="text-xs text-neutral-500">{formatPrice(totalForAvailable)} total</p>
+          </div>
+        )}
 
         <span className="block w-full rounded-md bg-black px-3 py-2 text-center text-xs font-medium text-white">
           {isAuction ? 'Place Bid' : 'Make an Offer'}

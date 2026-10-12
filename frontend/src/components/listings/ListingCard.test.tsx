@@ -18,13 +18,15 @@ const baseListing: ListingCardData = {
   auction: null,
 };
 
-test('renders listing title, quantity, condition, price and location', () => {
+test('renders listing title, quantity, condition, per-unit price, total, and location', () => {
   render(<ListingCard listing={baseListing} />);
 
   expect(screen.getByText('iPhone Cases (Mixed Colors)')).toBeInTheDocument();
   expect(screen.getByText(/500 units/)).toBeInTheDocument();
   expect(screen.getByText(/New/)).toBeInTheDocument();
   expect(screen.getByText('$25.00')).toBeInTheDocument();
+  expect(screen.getByText('/ unit')).toBeInTheDocument();
+  expect(screen.getByText('$12,500.00 total')).toBeInTheDocument();
   expect(screen.getByText('Dubai, UAE')).toBeInTheDocument();
 });
 
@@ -52,9 +54,10 @@ test('shows "Place Bid" and the current bid for an auction listing', () => {
 
   expect(screen.getByText('Place Bid')).toBeInTheDocument();
   expect(screen.getByText('$550.00')).toBeInTheDocument();
+  expect(screen.getByText('current bid')).toBeInTheDocument();
 });
 
-test('falls back to the starting price when an auction has no bids yet', () => {
+test('labels the fallback honestly as a per-unit price when an auction has no bids yet', () => {
   const auctionListing: ListingCardData = {
     ...baseListing,
     sellingMethod: 'AUCTION',
@@ -63,4 +66,5 @@ test('falls back to the starting price when an auction has no bids yet', () => {
   render(<ListingCard listing={auctionListing} />);
 
   expect(screen.getByText('$25.00')).toBeInTheDocument();
+  expect(screen.getByText('per unit (starting)')).toBeInTheDocument();
 });

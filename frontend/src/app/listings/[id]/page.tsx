@@ -21,7 +21,7 @@ const HANDOVER_LABELS: Record<ListingDetail['handoverMethod'], string> = {
   BUYER_PICKUP: 'Buyer arranges pickup',
 };
 
-const formatPrice = (value: string) =>
+const formatPrice = (value: number | string) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(value));
 
 type Tab = 'description' | 'shipping' | 'seller';
@@ -101,7 +101,16 @@ const ListingDetailPage = () => {
           <dl className="mt-6 space-y-2 text-sm">
             <div className="flex justify-between border-b border-neutral-100 pb-2">
               <dt className="text-neutral-500">Starting Price</dt>
-              <dd className="font-medium text-neutral-900">{formatPrice(listing.startingPrice)}</dd>
+              <dd className="font-medium text-neutral-900">
+                {formatPrice(listing.startingPrice)}{' '}
+                <span className="text-xs font-normal text-neutral-500">/ unit</span>
+              </dd>
+            </div>
+            <div className="flex justify-between border-b border-neutral-100 pb-2">
+              <dt className="text-neutral-500">Total ({listing.quantityAvailable} available)</dt>
+              <dd className="font-medium text-neutral-900">
+                {formatPrice(Number(listing.startingPrice) * listing.quantityAvailable)}
+              </dd>
             </div>
             <div className="flex justify-between border-b border-neutral-100 pb-2">
               <dt className="text-neutral-500">Condition</dt>
