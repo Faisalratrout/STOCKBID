@@ -31,8 +31,13 @@ export type NotificationView = Prisma.NotificationGetPayload<{
   select: typeof notificationSelect;
 }>;
 
-export type ListingCard = Prisma.ListingGetPayload<{ select: typeof listingCardSelect }>;
-export type ListingDetail = Prisma.ListingGetPayload<{ select: typeof listingDetailSelect }>;
+// BRW-01/04: startingPrice is the total lot price; startingPricePerUnit divides it by quantityTotal.
+export type ListingCard = Prisma.ListingGetPayload<{ select: typeof listingCardSelect }> & {
+  startingPricePerUnit: Prisma.Decimal;
+};
+export type ListingDetail = Prisma.ListingGetPayload<{ select: typeof listingDetailSelect }> & {
+  startingPricePerUnit: Prisma.Decimal;
+};
 
 export interface PublicUser {
   id: string;

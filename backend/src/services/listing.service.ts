@@ -3,6 +3,7 @@ import { prisma } from '../config/db';
 import { ApiError } from '../utils/ApiError';
 import { lockAuction, lockListing } from '../utils/locks';
 import { logger } from '../utils/logger';
+import { perUnit } from '../utils/money';
 import { pageMeta } from '../utils/ApiResponse';
 import type { AuthUser } from '../types/express';
 import type { ListingCard, ListingDetail, Paginated } from '../types/dto';
@@ -27,6 +28,14 @@ const publiclyBrowsable = (now: Date): Prisma.ListingWhereInput => ({
   status: 'ACTIVE',
   quantityAvailable: { gt: 0 },
   OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+});
+
+// BRW-01/04: display-only per-unit price next to the stored lot total.
+const withPerUnit = <T extends { startingPrice: Prisma.Decimal; quantityTotal: number }>(
+  listing: T,
+): T & { startingPricePerUnit: Prisma.Decimal } => ({
+  ...listing,
+  startingPricePerUnit: perUnit(listing.startingPrice, listing.quantityTotal),
 });
 
 /** STK-01 / STK-02 */
@@ -55,7 +64,9 @@ export const createListing = async (
     expiresAt,
   };
 
-  if (!isAuction) return prisma.listing.create({ data, select: listingDetailSelect });
+  if (!isAuction) {
+    return withPerUnit(await prisma.listing.create({ data, select: listingDetailSelect }));
+  }
 
   // The auction row needs the listing's id and the listing points back at it as its current
   // auction, so this is three writes rather than one nested create.
@@ -78,7 +89,7 @@ export const createListing = async (
   });
 
   await scheduleCloseAfterCommit(listing.auction!);
-  return listing;
+  return withPerUnit(listing);
 };
 
 // AUC-01: schedule the close job once the auction row exists and has committed. The listing
@@ -137,7 +148,7 @@ export const browseListings = async (query: BrowseQuery): Promise<Paginated<List
       take: query.pageSize,
     }),
   ]);
-  return { items, meta: pageMeta(query.page, query.pageSize, total) };
+  return { items: items.map(withPerUnit), meta: pageMeta(query.page, query.pageSize, total) };
 };
 
 /** STK-06 */
@@ -159,7 +170,7 @@ export const listMine = async (
       take: query.pageSize,
     }),
   ]);
-  return { items, meta: pageMeta(query.page, query.pageSize, total) };
+  return { items: items.map(withPerUnit), meta: pageMeta(query.page, query.pageSize, total) };
 };
 
 /** BRW-04: delisted listings are visible only to their owner and admins. */
@@ -169,7 +180,7 @@ export const getListing = async (id: string, viewer?: AuthUser): Promise<Listing
 
   const privileged = viewer?.role === 'ADMIN' || viewer?.id === listing.sellerId;
   if (listing.status === 'DELISTED' && !privileged) throw ApiError.notFound('Listing not found');
-  return listing;
+  return withPerUnit(listing);
 };
 
 const loadOwned = async (id: string, sellerId: string) => {
@@ -347,7 +358,7 @@ export const relistAuction = async (
   });
 
   await scheduleCloseAfterCommit(listing.auction!);
-  return listing;
+  return withPerUnit(listing);
 };
 
 /** STK-05 */

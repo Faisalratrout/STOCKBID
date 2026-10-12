@@ -12,6 +12,7 @@ export const listingCardSelect = {
   id: true,
   title: true,
   condition: true,
+  quantityTotal: true,
   quantityAvailable: true,
   location: true,
   sellingMethod: true,
