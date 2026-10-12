@@ -4,6 +4,7 @@ import type { listingCardSelect, listingDetailSelect } from './listing.select';
 import type { offerSelect } from './offer.select';
 import type { auctionDetailSelect } from './auction.select';
 import type { orderSelect } from './order.select';
+import type { notificationSelect } from './notification.select';
 
 export type OfferView = Prisma.OfferGetPayload<{ select: typeof offerSelect }>;
 
@@ -25,6 +26,10 @@ export type AuctionView = Prisma.AuctionGetPayload<{ select: typeof auctionDetai
 };
 
 export type OrderView = Prisma.OrderGetPayload<{ select: typeof orderSelect }>;
+
+export type NotificationView = Prisma.NotificationGetPayload<{
+  select: typeof notificationSelect;
+}>;
 
 export type ListingCard = Prisma.ListingGetPayload<{ select: typeof listingCardSelect }>;
 export type ListingDetail = Prisma.ListingGetPayload<{ select: typeof listingDetailSelect }>;
