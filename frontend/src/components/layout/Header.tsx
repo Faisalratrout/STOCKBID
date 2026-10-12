@@ -20,6 +20,9 @@ export const Header = () => {
       <nav className="flex items-center gap-4">
         {user ? (
           <>
+            <Link href="/offers" className="text-sm font-medium text-neutral-700 hover:text-black">
+              {user.role === 'SELLER' ? 'Offers Received' : 'My Offers'}
+            </Link>
             <span className="text-sm text-neutral-600">{user.companyName ?? user.email}</span>
             <Button variant="secondary" onClick={() => logout()}>
               Log out
